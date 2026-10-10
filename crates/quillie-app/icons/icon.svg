@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Quillie mark: a quill nib, reduced to the flat shapes the app uses.
+       One accent colour, no gradients (design rules, §17). -->
+  <rect width="512" height="512" rx="96" fill="#16161a"/>
+  <!-- the nib: a triangle narrowing to a slit -->
+  <path d="M256 96 L344 288 L256 416 L168 288 Z" fill="#2f6feb"/>
+  <!-- the slit -->
+  <path d="M256 208 L272 288 L256 368 L240 288 Z" fill="#16161a"/>
+  <!-- the cut line -->
+  <rect x="176" y="272" width="160" height="18" rx="9" fill="#16161a"/>
+</svg>

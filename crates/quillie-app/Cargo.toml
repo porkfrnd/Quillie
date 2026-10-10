@@ -31,7 +31,8 @@ tempfile = "3"
 # the IPC handlers -- filesystem, process supervision, audio -- compiles and
 # tests on a machine with no webview development packages installed, which is
 # the difference between `cargo test` running in 30 seconds and not at all.
-tauri = { version = "2", features = [], optional = true }
+tauri = { version = "2", features = ["protocol-asset"], optional = true }
+tauri-plugin-shell = { version = "2", optional = true }
 
 [dev-dependencies]
 quillie-core = { path = "../quillie-core" }
@@ -39,7 +40,7 @@ quillie-core = { path = "../quillie-core" }
 [features]
 default = []
 # The packaged application. Enabled by the Tauri build.
-tauri-host = ["dep:tauri", "dep:tauri-build"]
+tauri-host = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-shell"]
 # Bundled FFmpeg/ffprobe sidecars are only present in a packaged build.
 # `cargo test` on a dev checkout must work without them.
 sidecars = []

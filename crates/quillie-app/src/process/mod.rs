@@ -14,7 +14,7 @@
 //!   that does.
 
 use std::collections::VecDeque;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 /// How much stderr to retain for diagnostics.
@@ -117,8 +117,10 @@ impl SidecarCommand {
     ///
     /// Args are passed through as a slice; there is no shell, so nothing in a
     /// filename can be interpreted as syntax.
-    #[cfg_attr(not(feature = "tauri-host"), allow(dead_code))]
-    fn to_command(&self) -> Command {
+    ///
+    /// stdin is null: a sidecar that tries to prompt will fail fast rather
+    /// than hang forever waiting on a terminal that does not exist.
+    pub fn to_command(&self) -> Command {
         let mut c = Command::new(&self.program);
         c.args(&self.args)
             .stdin(Stdio::null())
@@ -126,6 +128,57 @@ impl SidecarCommand {
             .stderr(Stdio::piped());
         c
     }
+
+    /// Spawn the sidecar.
+    pub fn spawn(&self) -> Result<Child, ProcessError> {
+        self.to_command()
+            .spawn()
+            .map_err(|e| ProcessError::Spawn(format!("{}: {e}", self.program)))
+    }
+
+    /// Run to completion, capturing stdout and the stderr tail.
+    ///
+    /// This is the blocking helper used by short, user-initiated work such as
+    /// a probe. Long jobs use the streaming path instead so progress can be
+    /// reported and the job can be cancelled.
+    pub fn run_captured(&self) -> Result<Output_, ProcessError> {
+        let mut child = self.spawn()?;
+        let mut stderr_ring = StderrRing::new();
+
+        // Drain stderr concurrently so a chatty child cannot fill its pipe
+        // buffer and deadlock against a parent that is not reading it.
+        if let Some(mut err) = child.stderr.take() {
+            let mut buf = [0u8; 8192];
+            loop {
+                match std::io::Read::read(&mut err, &mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => stderr_ring.push(&buf[..n]),
+                }
+            }
+        }
+
+        let output = child
+            .wait_with_output()
+            .map_err(|e| ProcessError::Spawn(e.to_string()))?;
+
+        Ok(Output_ {
+            success: output.status.success(),
+            status: output.status.code(),
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr_tail: stderr_ring.tail(),
+        })
+    }
+}
+
+/// Result of a completed sidecar invocation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Output_ {
+    pub success: bool,
+    pub status: Option<i32>,
+    pub stdout: String,
+    /// The retained tail of stderr. Never shown to the user as the message;
+    /// it is the `detail` field of a typed error (rule 8).
+    pub stderr_tail: String,
 }
 
 /// Progress as reported by FFmpeg's `-progress pipe:1` stream.

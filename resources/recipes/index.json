@@ -1,0 +1,4 @@
+{
+  "$comment": "Motion recipes ship here as JSON. Empty until Phase 4, where the first three recipes (smooth zoom, spring title entrance, punch-in) land. Kept as a real file so the bundle resource glob matches and a missing directory fails the build rather than the packaging step.",
+  "recipes": []
+}

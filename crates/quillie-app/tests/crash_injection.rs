@@ -24,7 +24,7 @@ use quillie_app::io::{ProjectStore, StoreError};
 use quillie_core::project::Project;
 use quillie_core::time::FrameRate;
 use std::fs;
-use std::path::PathBuf;
+use std::path::Path;
 
 fn project(name: &str) -> Project {
     let mut p = Project::new(name, FrameRate::NTSC_30, (1920, 1080));
@@ -37,7 +37,7 @@ fn project(name: &str) -> Project {
     p
 }
 
-fn store_in(dir: &PathBuf, name: &str) -> ProjectStore {
+fn store_in(dir: &Path, name: &str) -> ProjectStore {
     ProjectStore::new(dir.join(name), Some(dir.join("autosave").join(format!("{name}.journal"))))
 }
 
