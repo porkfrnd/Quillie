@@ -1,0 +1,41 @@
+[workspace]
+resolver = "2"
+members = ["crates/quillie-core"]
+# quillie-app joins once its Tauri host is wired up (Task 1). Keeping it out of
+# the default member set lets `cargo test -p quillie-core` run on a machine with
+# no webview dev packages installed.
+exclude = ["crates/quillie-app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/porkfrnd/Quillie"
+authors = ["Quillie contributors"]
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[profile.release]
+# §14.6. These are measured, not aspirational -- see bench/results/ and
+# docs/reports/ for the size numbers each value produced.
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Per-crate overrides (§14.6). quillie-core is pure logic with no I/O, so the
+# link-time benefit is nil while the compile-time cost is real. `lto` is not a
+# per-package setting, so only settings cargo allows here are used; the
+# measurement that justified these numbers is in docs/reports/phase-0.md.
+[profile.release.package.quillie-core]
+opt-level = 2
+
+# NOTE: there is deliberately no `[profile.test] panic = "unwind"` here. Cargo
+# ignores `panic` for test/bench profiles -- they always unwind -- and warns if
+# you set it. Tests that inject crashes rely on unwinding, which is the
+# default.
