@@ -17,6 +17,7 @@
 //!     returns. A command much over 30 lines is a design smell.
 
 pub mod audio;
+pub mod capability_probe;
 pub mod export;
 pub mod io;
 pub mod process;
