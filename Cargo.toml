@@ -1,10 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/quillie-core"]
-# quillie-app joins once its Tauri host is wired up (Task 1). Keeping it out of
-# the default member set lets `cargo test -p quillie-core` run on a machine with
-# no webview dev packages installed.
-exclude = ["crates/quillie-app"]
+members = ["crates/quillie-core", "crates/quillie-app"]
 
 [workspace.package]
 version = "0.1.0"
