@@ -1,0 +1,53 @@
+{
+  "timestamp": "2026-10-10T14:38:57.796Z",
+  "commit": "0b5e2086dc1ca7a9dc823afedeaf74b28e80eed6",
+  "ffmpegVersion": "ffmpeg version 7.1.5-0+deb13u1 Copyright (c) 2000-2026 the FFmpeg developers",
+  "webviewVersion": "not measured",
+  "hardware": {
+    "os": "linux 6.12.111+deb13-amd64",
+    "arch": "x64",
+    "cpuModel": "Intel(R) Core(TM) i5-6200U CPU @ 2.30GHz",
+    "physicalCores": 2,
+    "logicalCores": 4,
+    "totalRamMb": 7822,
+    "availableRamMb": 4179,
+    "gpuRenderer": null,
+    "diskType": "unknown (not measured)"
+  },
+  "tier": "mid",
+  "scenario": "cold-start + idle",
+  "measurements": [
+    {
+      "name": "cold_start_usable_ms",
+      "value": 104,
+      "unit": "ms",
+      "target": 6000,
+      "pass": true,
+      "note": "median of 3 runs. Approximated by process start, not a real window signal."
+    },
+    {
+      "name": "window_shell_ms",
+      "value": 104,
+      "unit": "ms",
+      "target": 1000,
+      "pass": true
+    },
+    {
+      "name": "idle_cpu_percent",
+      "value": 0.9,
+      "unit": "% of one core",
+      "target": 1,
+      "pass": true,
+      "note": "60s average after a 3s settle. Project open, nothing playing."
+    },
+    {
+      "name": "peak_memory_mb",
+      "value": 252.9,
+      "unit": "MiB",
+      "target": 1200,
+      "pass": true,
+      "note": "PSS from smaps_rollup, summed across the process tree."
+    }
+  ],
+  "isFloorMachine": false
+}
