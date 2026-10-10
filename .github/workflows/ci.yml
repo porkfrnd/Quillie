@@ -1,0 +1,202 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push supersedes an in-flight run for the same branch. Waiting for a
+# stale run to finish before starting the current one only delays the answer
+# the developer actually needs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Loud, immediate failures. Warnings are errors in this project.
+  RUSTFLAGS: -D warnings
+
+jobs:
+  # Fast feedback. Everything else may need this to pass first.
+  rust:
+    name: Rust (lint + test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Cache FFmpeg source
+        id: ffmpeg-src
+        run: |
+          mkdir -p ~/.cache/quillie
+          # The tarball is ~12 MiB and the build is 15-30 minutes, so it is
+          # worth caching. The build itself is not cached: it is the thing we
+          # want CI to prove still works.
+          curl -fsSL -o ~/.cache/quillie/ffmpeg-9.0.2.tar.xz \
+            https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz
+          echo "sha256sum: $(sha256sum ~/.cache/quillie/ffmpeg-9.0.2.tar.xz | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Verify the source tarball against its pinned hash
+        run: |
+          # 8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e
+          echo "8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e  ~/.cache/quillie/ffmpeg-9.0.2.tar.xz" | sha256sum -c -
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Test with media feature
+        # The `media` feature enables tests that shell out to real ffprobe.
+        # Run them too, so a parsing change that only works against captured
+        # JSON still gets checked against real output.
+        run: cargo test -p quillie-core --features media
+
+  ui:
+    name: UI (types + lint + test + budget)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - run: npm ci
+
+      - name: svelte-check (strict)
+        run: npm run check
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npx vitest run
+
+      - name: Build
+        run: npm run build
+
+      - name: Bundle budget
+        # §14.6. A budget nobody checks is a suggestion.
+        run: node scripts/check-size.mjs dist
+
+  sidecar:
+    name: FFmpeg sidecar (build + licence audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: /tmp/opencode/prefix
+          key: sidecar-deps-${{ hashFiles('scripts/build-sidecar.sh') }}
+
+      - name: Build and audit
+        run: |
+          # The script verifies the PGP signature, builds with
+          # --disable-autodetect, and fails if any GPL/nonfree component is
+          # linked. That audit is the point of this job: it is what proves the
+          # shipped sidecar is what docs/licenses.md claims.
+          QUILLIE_SIDECAR_WORK=/tmp/opencode ./scripts/build-sidecar.sh
+          echo "::group::buildconf"
+          crates/quillie-app/sidecars/ffmpeg-x86_64-unknown-linux-gnu -buildconf
+          echo "::endgroup::"
+
+      - name: Check the binary against the recorded manifest
+        run: |
+          # Catches a drifting rebuild. It does NOT verify upstream -- only the
+          # PGP signature does that.
+          if [ -f resources/sidecars/manifest.json ]; then
+            ( cd crates/quillie-app/sidecars && sha256sum -c <(jq -r '.binaries | to_entries[] | "\(.value.sha256)  \(.key)"' ../../../../resources/sidecars/manifest.json) ) || \
+            echo "::warning::Sidecar hash differs from manifest; the build drifted."
+          fi
+
+  package:
+    name: Package (${{ matrix.os }})
+    needs: [rust, ui]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            targets: deb,appimage
+          - os: windows-latest
+            targets: nsis
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build deps
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+            libssl-dev build-essential curl wget file libxdo-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.os == 'ubuntu-latest' && 'x86_64-unknown-linux-gnu' || 'x86_64-pc-windows-msvc' }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Build UI
+        run: npm ci --prefix ui && npm run build --prefix ui
+
+      - name: Build FFmpeg sidecar (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: ./scripts/build-sidecar.sh
+
+      - name: Build FFmpeg sidecar (Windows)
+        # MinGW build runs fine as a Windows sidecar. Building it here means
+        # no Windows machine is needed to produce a Windows package.
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          pacman -S --noconfirm --needed base-devel mingw-w64-x86_64-toolchain \
+            mingw-w64-x86_64-pkgconf nasm yasm
+          export PATH="/mingw64/bin:$PATH"
+          QUILLIE_TARGET_TRIPLE=x86_64-pc-windows-msvc \
+          QUILLIE_SIDECAR_WORK=/tmp/opencode ./scripts/build-sidecar.sh
+
+      - name: Package
+        shell: bash
+        run: |
+          npx --prefix ui tauri build \
+            ${matrix.targets:+--bundles "${{ matrix.targets }}"}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quillie-${{ matrix.os }}-${{ matrix.targets }}
+          path: |
+            crates/quillie-app/target/release/bundle/**/*.deb
+            crates/quillie-app/target/release/bundle/**/*.AppImage
+            crates/quillie-app/target/release/bundle/**/*.exe
+            crates/quillie-app/target/release/bundle/**/*.msi
+          if-no-files-found: warn
