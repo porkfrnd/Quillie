@@ -303,8 +303,13 @@ fn running_heavy(&self) -> (usize, usize) {
 
             match best {
                 Some(i) => {
-                    let job = self.queued.remove(i).unwrap();
-                    let mut job = job;
+                    // `remove` returns None only for an out-of-range index, and
+                    // `best` came from `enumerate` over this same VecDeque
+                    // with nothing mutating it in between. Handled anyway:
+                    // a panic here would take down the scheduler thread.
+                    let Some(mut job) = self.queued.remove(i) else {
+                        break;
+                    };
                     job.state = JobState::Running;
                     self.running.push(job.clone());
                     started.push(job);
@@ -362,13 +367,16 @@ fn running_heavy(&self) -> (usize, usize) {
     /// double-runs.
     pub fn cancel(&mut self, id: &str) -> bool {
         if let Some(i) = self.running.iter().position(|j| j.id == id) {
+            // Vec::remove returns the element directly; the index came from
+            // position() on this same Vec with nothing mutating it in between.
             let mut job = self.running.remove(i);
             job.state = JobState::Cancelled;
             return true;
         }
         if let Some(i) = self.queued.iter().position(|j| j.id == id) {
-            let mut job = self.queued.remove(i).unwrap();
-            job.state = JobState::Cancelled;
+            if let Some(mut job) = self.queued.remove(i) {
+                job.state = JobState::Cancelled;
+            }
             return true;
         }
         false
