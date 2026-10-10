@@ -132,7 +132,18 @@ pub enum Inverse {
     /// Undoes a split by restoring the original clip verbatim, including its
     /// id, which is what makes undo byte-exact rather than merely visually
     /// equivalent.
-    UndoSplitClip { sequence: SequenceId, track: TrackId, index: usize, original: Box<Clip> },
+    ///
+    /// It stores the halves it created, not a rule for finding them. A later
+    /// ripple move or drag can move the halves anywhere, so any positional
+    /// search at undo time is a guess -- and a guess that fails only for
+    /// certain edit orderings, which is the worst kind of bug.
+    UndoSplitClip {
+        sequence: SequenceId,
+        track: TrackId,
+        index: usize,
+        original: Box<Clip>,
+        halves: Vec<Clip>,
+    },
     /// Undoes a ripple delete by restoring the whole prior clip list.
     UndoRippleDelete { sequence: SequenceId, track: TrackId, restored: Vec<Clip> },
     /// Undoes a ripple move: restore every shifted clip to where it was.
@@ -169,13 +180,10 @@ impl Inverse {
             Inverse::UndoTrimClip { clip, edge, from } => {
                 restore_edge(project, clip, edge, from)
             }
-            Inverse::UndoSplitClip { sequence, track, index, original } => {
-                // A split replaced one clip at `index` with two halves that
-                // together cover exactly [start, end) of the original and
-                // share its source range. Rather than guess which clips are
-                // the halves, find the maximal run of contiguous clips that
-                // starts at the original's start and spans exactly its
-                // duration, and replace that run with the original.
+            Inverse::UndoSplitClip { sequence, track, index, original, halves } => {
+                // Remove exactly the halves this split created, wherever a
+                // later edit moved them, then restore the original at `index`.
+                let half_ids: Vec<ClipId> = halves.iter().map(|h| h.id).collect();
                 let seq = project
                     .sequences
                     .iter_mut()
@@ -184,32 +192,11 @@ impl Inverse {
                 let tr = seq
                     .track_mut(track)
                     .ok_or(EditError::UnknownTrack(track))?;
-
-                let start = original.timeline_start;
-                let end = Ticks(start.raw() + original.duration().raw());
-                let first = tr
-                    .clips
-                    .iter()
-                    .position(|c| c.timeline_start == start)
-                    .ok_or(EditError::UnknownClip(original.id))?;
-                // Walk forward over the contiguous run. The left half keeps the
-                // original clip's id (apply only shortened its source_out), so
-                // contiguity from `start` for exactly `original.duration()` is
-                // the identifying property.
-                let mut last = first;
-                // Advance the cursor past the first clip before testing the
-                // next one.
-                let mut cursor = Ticks(start.raw() + tr.clips[first].duration().raw());
-                while last + 1 < tr.clips.len() && cursor < end {
-                    let next = &tr.clips[last + 1];
-                    if next.timeline_start != cursor {
-                        break;
-                    }
-                    cursor = Ticks(cursor.raw() + next.duration().raw());
-                    last += 1;
-                }
-                for _ in first..=last {
-                    tr.clips.remove(first);
+                let positions: Vec<usize> = (0..tr.clips.len())
+                    .filter(|i| half_ids.contains(&tr.clips[*i].id))
+                    .collect();
+                for pos in positions.iter().rev() {
+                    tr.clips.remove(*pos);
                 }
                 let idx = index.min(tr.clips.len());
                 tr.clips.insert(idx, *original);
@@ -448,19 +435,25 @@ impl Project {
                 if at <= original.source_in || at >= original.source_out {
                     return Err(EditError::InvertedRange);
                 }
+                // The left half keeps the original id: it *is* the clip the
+                // user was looking at, just shortened. Only the tail gets a new
+                // id. This matters because link groups and the UI's selection
+                // both refer to the clip by id across a split.
                 let mut left = original.clone();
                 left.source_out = at;
                 let mut right = original.clone();
+                right.id = ClipId::new_v4();
                 right.source_in = at;
                 right.timeline_start = Ticks(left.timeline_start.raw() + left.duration().raw());
 
-                tr.clips[index] = left;
-                tr.clips.insert(index + 1, right);
+                tr.clips[index] = left.clone();
+                tr.clips.insert(index + 1, right.clone());
                 Ok(Inverse::UndoSplitClip {
                     sequence,
                     track,
                     index,
                     original: Box::new(original),
+                    halves: vec![left, right],
                 })
             }
 

@@ -87,7 +87,7 @@ pub struct ProbeStream {
     channels: Option<u16>,
     #[serde(default)]
     channel_layout: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_opt_f64")]
     duration: Option<f64>,
     #[serde(default)]
     tags: std::collections::BTreeMap<String, String>,

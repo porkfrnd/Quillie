@@ -41,6 +41,9 @@ quillie-core = { path = "../quillie-core" }
 default = []
 # The packaged application. Enabled by the Tauri build.
 tauri-host = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-shell"]
+# Tests that run the real ffprobe/ffmpeg sidecars against real generated
+# media. Off by default so `cargo test` works with no sidecar built.
+media = []
 # Bundled FFmpeg/ffprobe sidecars are only present in a packaged build.
 # `cargo test` on a dev checkout must work without them.
 sidecars = []
