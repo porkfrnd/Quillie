@@ -10,6 +10,7 @@
 
 // Architecture rule 2 (§5): the only way to change a project is
 // `Project::apply(op) -> Result<Inverse, EditError>`. Nothing else mutates state.
+pub mod media;
 pub mod project;
 pub mod time;
 
