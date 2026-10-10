@@ -1,0 +1,139 @@
+/**
+ * Design tokens (§17).
+ *
+ * Compact by default: 13-14px base text, a 4px spacing grid, one neutral
+ * palette and one accent. No gradients, no glass, no decorative backgrounds.
+ * Light and dark both come from the same custom properties so a theme switch
+ * is a single class change on <html> rather than a second stylesheet.
+ */
+
+:root {
+  /* 4px spacing grid. Every margin and padding in the app is one of these. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  --font-ui:
+    system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
+
+  /* 13px is the base. 14px is used where the user is reading prose. */
+  --text-sm: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+
+  --radius-sm: 3px;
+  --radius-md: 5px;
+
+  --duration-fast: 120ms;
+  --duration-med: 200ms;
+}
+
+/* Light theme: the default. */
+:root,
+:root[data-theme='light'] {
+  --bg: #ffffff;
+  --bg-raised: #f6f6f7;
+  --bg-sunken: #ececee;
+  --bg-hover: #e6e6e9;
+  --bg-active: #dcdce0;
+
+  --fg: #16161a;
+  --fg-muted: #5c5c66;
+  --fg-subtle: #86868f;
+
+  --border: #d5d5da;
+  --border-strong: #b8b8c0;
+
+  --accent: #2f6feb;
+  --accent-fg: #ffffff;
+  --accent-subtle: #e8f0fe;
+
+  --danger: #c02b2b;
+  --warning: #9a6700;
+
+  /* Heat ruler (§8.5). Colour is never the only cue: each of these has a
+     matching text or pattern label, because conveying state by colour alone
+     fails WCAG AA and is unreadable to a meaningful share of users. */
+  --heat-ok: #1a7f37;
+  --heat-draft: #bc6a00;
+  --heat-cached: #1f6feb;
+}
+
+/* Dark theme. */
+:root[data-theme='dark'] {
+  --bg: #16161a;
+  --bg-raised: #1e1e23;
+  --bg-sunken: #101013;
+  --bg-hover: #26262c;
+  --bg-active: #303038;
+
+  --fg: #ececef;
+  --fg-muted: #a0a0aa;
+  --fg-subtle: #74747e;
+
+  --border: #2c2c33;
+  --border-strong: #3d3d46;
+
+  --accent: #6f9dff;
+  --accent-fg: #10101a;
+  --accent-subtle: #1c2740;
+
+  --danger: #ff6b6b;
+  --warning: #d4a72c;
+
+  --heat-ok: #4ac26b;
+  --heat-draft: #d9a441;
+  --heat-cached: #6f9dff;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-fast: 0ms;
+    --duration-med: 0ms;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* A visible focus ring everywhere (§17 accessibility). Never removed, only
+   restyled -- keyboard users must always be able to see where they are. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: var(--radius-sm);
+}
+
+/* Text selection only where it is useful. Dragging a clip should not paint
+   the whole timeline blue. */
+.timeline,
+.timeline * {
+  user-select: none;
+}
