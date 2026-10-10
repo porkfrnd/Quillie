@@ -1,0 +1,23 @@
+[package]
+name = "quillie-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Quillie project model, time base, and media logic. Pure: no Tauri, no process spawning."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+proptest = "1"
+
+[features]
+# Tests that shell out to a real ffprobe/ffmpeg to generate or inspect media.
+# Off by default so `cargo test` works with no media tooling installed.
+# (§4: "quillie-core must build and test without Tauri and without FFmpeg")
+media = []
