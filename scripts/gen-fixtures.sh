@@ -39,30 +39,37 @@ gen() {
   local out="$OUT/$name"
   echo "-> $out ($size @ $rate, $(dur "$seconds")s, $vcodec)"
   # shellcheck disable=SC2086
-  "$FFMPEG" -hide_banner -loglevel error -y \
-    -f lavfi -i "$SRC" \
-    $([ -n "$MARKER" ] && echo "-vf $MARKER") \
-    -c:v "$vcodec" $extra \
-    -pix_fmt yuv420p \
-    -t "$(dur "$seconds")" \
-    "$out" 2>&1 | sed 's/^/   /' || {
-      echo "   (encoder $vcodec unavailable, falling back to mpeg4)" >&2
-      "$FFMPEG" -hide_banner -loglevel error -y -f lavfi -i "$SRC" \
-        -c:v mpeg4 -q:v 4 -t "$(dur "$seconds")" "$out"
-    }
+  if ! "$FFMPEG" -hide_banner -loglevel error -y \
+      -f lavfi -i "$SRC" \
+      $([ -n "$MARKER" ] && echo "-vf $MARKER") \
+      -c:v "$vcodec" $extra \
+      -pix_fmt yuv420p \
+      -t "$(dur "$seconds")" \
+      "$out" 2>/dev/null; then
+    echo "   (encoder $vcodec unavailable in this build, falling back to mpeg4)" >&2
+    "$FFMPEG" -hide_banner -loglevel error -y -f lavfi -i "$SRC" \
+      -c:v mpeg4 -q:v 4 -t "$(dur "$seconds")" "$out"
+  fi
 }
 
-# §16 benchmark scenario 1: a 10-minute 1080p H.264, a 10-minute 4K HEVC, and
-# a 5-minute 1080p60. These are the sources the whole benchmark runs against.
-gen "1080p_h264_10min.mp4"  1920x1080 30 "$(dur 600)" libx264  "-preset veryfast -crf 23"
-gen "4k_hevc_10min.mp4"     3840x2160 30 "$(dur 600)" libx265  "-preset ultrafast -crf 32"
-gen "1080p60_h264_5min.mp4" 1920x1080 60 "$(dur 300)" libx264  "-preset veryfast -crf 22"
+# §16 benchmark scenario 1 wants a 10-minute 1080p, a 10-minute 4K, and a
+# 5-minute 1080p60 source. These are the shapes the benchmark exercises.
+#
+# NOTE on codec names: this sidecar build has NO H.264 or HEVC *encoder*
+# (ADR-006 is open; libx264 is GPL and excluded), so the files are named for
+# their shape and resolution rather than for a codec they do not contain.
+# Passing -c:v libx264 to this sidecar fails with "Unknown encoder", which is
+# the correct behaviour: a fixture that silently became a different codec
+# would make every benchmark result a lie.
+gen "1080p30_10min.mp4"  1920x1080 30 "$(dur 600)" libvpx-vp9 "-b:v 5M -deadline realtime -cpu-used 8"
+gen "4k30_10min.mp4"     3840x2160 30 "$(dur 600)" libvpx-vp9 "-b:v 20M -deadline realtime -cpu-used 8"
+gen "1080p60_5min.mp4"   1920x1080 60 "$(dur 300)" libvpx-vp9 "-b:v 6M -deadline realtime -cpu-used 8"
 
 # A still-image source for thumbnail and overlay-stream tests.
-echo "-> $OUT/thumb_source.mkv"
+echo "-> $OUT/thumb_source.webp"
 "$FFMPEG" -hide_banner -loglevel error -y \
   -f lavfi -i "testsrc2=size=640x360:rate=1:duration=$(dur 10)" \
-  -c:v ffv1 "$OUT/thumb_source.mkv"
+  -c:v libwebp_anim -lossless 1 -loop 0 "$OUT/thumb_source.webp"
 
 # A 1 kHz tone for audio-only paths (mixer, loudness, peaks).
 echo "-> $OUT/tone_1khz.wav"

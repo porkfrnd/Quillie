@@ -93,7 +93,7 @@ make distclean >/dev/null 2>&1 || true
   --enable-indev=lavfi \
   --enable-filter=testsrc2,testsrc,sine,anullsrc,aevalsrc \
   --enable-decoder=h264,hevc,av1,vp9,aac,mp3,opus,vorbis,flac,pcm_s16le,mjpeg,png,webp \
-  --enable-encoder=libvpx_vp9,libopus,aac,libvorbis,libwebp_anim,pcm_s16le,png,mjpeg,flac \
+  --enable-encoder=libvpx_vp9,libopus,aac,libvorbis,libwebp_anim,pcm_s16le,png,mjpeg,flac,wrapped_avframe,libwebp \
   --enable-parser=h264,hevc,av1,vp9,aac,opus \
   --enable-filter=scale,crop,overlay,format,trim,atrim,setpts,asetpts,concat,amix,volume,afade,fps,pad,hflip,vflip,rotate,transpose \
   --enable-libvpx --enable-libopus --enable-libdav1d --enable-libvorbis --enable-libwebp --enable-zlib \
