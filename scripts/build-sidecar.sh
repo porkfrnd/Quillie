@@ -96,7 +96,8 @@ make distclean >/dev/null 2>&1 || true
   --enable-filter=scale,crop,overlay,format,trim,atrim,setpts,asetpts,concat,amix,volume,afade,fps,pad,hflip,vflip,rotate,transpose \
   --enable-libvpx --enable-libopus --enable-libdav1d --enable-libvorbis --enable-libwebp --enable-zlib \
   --extra-cflags="-I$PREFIX/usr/include" \
-  --extra-ldflags="-L$PREFIX/usr/lib/x86_64-linux-gnu -L$PREFIX/usr/lib -lwebp -lvpx -lopus -lvorbis -lvorbisenc -ldav1d -lz -logg -lsharpyuv -lm" \
+  --extra-ldflags="-L$PREFIX/usr/lib/x86_64-linux-gnu -L$PREFIX/usr/lib -Wl,-rpath-link,$PREFIX/usr/lib/x86_64-linux-gnu" \
+  --extra-libs="-lwebp -lwebpmux -lwebpdemux -lvpx -lopus -lvorbis -lvorbisenc -ldav1d -lz -logg -lsharpyuv -lm" \
   2>&1 | tail -25
 
 # --- 3. build -----------------------------------------------------------
