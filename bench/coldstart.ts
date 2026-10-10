@@ -142,10 +142,15 @@ async function launchAndMeasure(): Promise<{ child: ChildProcess; sample: ColdSt
   // both are meaningless.
   //
   // The binary is launched directly, so what gets measured is what ships.
+  //
+  // Skipped with --no-build, because a rebuild before a benchmark run changes
+  // the machine's page cache and CPU state and that is not a cold start.
   const binary = resolveBinary();
-  execFileSync(cargo, ['build', '--release', '--bin', 'quillie', '--features', 'tauri-host'], {
-    stdio: 'inherit',
-  });
+  if (!args.includes('--no-build')) {
+    execFileSync(cargo, ['build', '--release', '--bin', 'quillie', '--features', 'tauri-host'], {
+      stdio: 'inherit',
+    });
+  }
 
   const child = spawn(binary, [], { stdio: ['ignore', 'pipe', 'pipe'], detached: true });
 
