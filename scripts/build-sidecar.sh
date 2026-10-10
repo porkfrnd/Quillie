@@ -28,6 +28,10 @@ PREFIX="$WORK/prefix"
 SRC="$WORK/ffmpeg-$FFMPEG_VERSION"
 OUT="$WORK/ffbuild"
 TARGET_TRIPLE="${QUILLIE_TARGET_TRIPLE:-x86_64-unknown-linux-gnu}"
+# Parallel compile jobs. FFmpeg's largest translation units (libavfilter,
+# libavcodec) are memory-hungry; on a 4 GB machine with a desktop running, -j2
+# is already near the limit and -j1 is safer if the build is being OOM-killed.
+JOBS="${QUILLIE_JOBS:-2}"
 
 export PKG_CONFIG_PATH="$PREFIX/usr/lib/x86_64-linux-gnu/pkgconfig"
 export PKG_CONFIG_LIBDIR="$PKG_CONFIG_PATH"
@@ -92,12 +96,18 @@ make distclean >/dev/null 2>&1 || true
   --enable-filter=scale,crop,overlay,format,trim,atrim,setpts,asetpts,concat,amix,volume,afade,fps,pad,hflip,vflip,rotate,transpose \
   --enable-libvpx --enable-libopus --enable-libdav1d --enable-libvorbis --enable-libwebp --enable-zlib \
   --extra-cflags="-I$PREFIX/usr/include" \
-  --extra-ldflags="-L$PREFIX/usr/lib/x86_64-linux-gnu -L$PREFIX/usr/lib" \
+  --extra-ldflags="-L$PREFIX/usr/lib/x86_64-linux-gnu -L$PREFIX/usr/lib -lwebp -lvpx -lopus -lvorbis -lvorbisenc -ldav1d -lz -logg -lsharpyuv -lm" \
   2>&1 | tail -25
 
 # --- 3. build -----------------------------------------------------------
-log "3/4 make -j2"
-make -j2 2>&1 | tail -25
+log "3/4 make -j${JOBS}"
+# Keep the full log; the summary at the end is what you read, but a killed
+# build leaves no error otherwise.
+make -j"${JOBS}" > "$WORK/make.log" 2>&1 || {
+  echo "make failed; last 40 lines:" >&2
+  tail -40 "$WORK/make.log" >&2
+  exit 1
+}
 make install 2>&1 | tail -3
 strip "$OUT/bin/ffmpeg" "$OUT/bin/ffprobe"
 
