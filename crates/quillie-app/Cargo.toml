@@ -1,0 +1,29 @@
+[package]
+name = "quillie-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Quillie Tauri host: commands, filesystem, process supervision, audio."
+
+[lib]
+name = "quillie_app"
+path = "src/lib.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+quillie-core = { path = "../quillie-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+
+[features]
+# Bundled FFmpeg/ffprobe sidecars are only present in a packaged build.
+# `cargo test` on a dev checkout must work without them.
+default = []
