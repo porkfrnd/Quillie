@@ -19,15 +19,11 @@
     readonly state: 'Queued' | 'Running' | 'Done' | 'Failed' | 'Cancelled';
   }
 
-  let jobs = $state<readonly Job[]>([]);
-
-  // Props are how the shell feeds real jobs in; the placeholder keeps the
-  // component renderable before the first job event arrives.
-  let { initial = [] as readonly Job[] }: { initial?: readonly Job[] } = $props();
-
-  $effect(() => {
-    jobs = initial;
-  });
+  // The shell feeds jobs in as a prop. `jobs` is derived rather than copied
+  // into $state through an $effect: the copy needed an effect to stay in sync,
+  // which means one render where the list lagged behind the prop, and it gave
+  // the component a second source of truth for something it does not own.
+  let { jobs = [] as readonly Job[] }: { jobs?: readonly Job[] } = $props();
 
   function cancel(id: string): void {
     // Cancellation must reach the scheduler, not just hide the row (§9.1).
