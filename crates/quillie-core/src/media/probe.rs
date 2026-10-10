@@ -100,32 +100,84 @@ pub struct ProbeStream {
 /// ffprobe is inconsistent about numeric fields: some containers report
 /// `bits_per_raw_sample` as a number, others as a quoted string. Accept both,
 /// because rejecting a valid file at import is much worse than the ambiguity.
+///
+/// A value that does not fit the target type yields `None` rather than failing
+/// the parse. The previous untagged-enum version deserialised straight into
+/// `u16`, so a damaged header reporting `channels: 999999` produced a hard
+/// error and took the *entire file* down with it -- losing a perfectly good
+/// video because an audio field was corrupt. The visitor accepts every JSON
+/// numeric width and range-checks here, so only the field is lost.
 fn de_opt_u16<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u16>, D::Error> {
-    #[derive(serde::Deserialize)]
-    #[serde(untagged)]
-    enum NumOrStr {
-        Num(u16),
-        Str(String),
-    }
-    Ok(match <Option<NumOrStr> as serde::Deserialize>::deserialize(d)? {
-        Some(NumOrStr::Num(n)) => Some(n),
-        Some(NumOrStr::Str(s)) => s.trim().parse().ok(),
-        None => None,
-    })
+    let wide = d.deserialize_any(LenientInt {
+        min: u128::from(u16::MIN),
+        max: u128::from(u16::MAX),
+    })?;
+    Ok(wide.and_then(|n| u16::try_from(n).ok()))
 }
 
 fn de_opt_u64<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
-    #[derive(serde::Deserialize)]
-    #[serde(untagged)]
-    enum NumOrStr {
-        Num(u64),
-        Str(String),
-    }
-    Ok(match <Option<NumOrStr> as serde::Deserialize>::deserialize(d)? {
-        Some(NumOrStr::Num(n)) => Some(n),
-        Some(NumOrStr::Str(s)) => s.trim().parse().ok(),
-        None => None,
+    d.deserialize_any(LenientInt {
+        min: u128::from(u64::MIN),
+        max: u128::from(u64::MAX),
     })
+}
+
+/// A visitor that reads a number in any JSON integer width, or a numeric
+/// string, and reports `None` for anything outside the configured range.
+struct LenientInt {
+    min: u128,
+    max: u128,
+}
+
+impl<'de> serde::de::Visitor<'de> for LenientInt {
+    type Value = Option<u64>;
+
+    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "an integer or numeric string in {}..={}", self.min, self.max)
+    }
+
+    fn visit_none<E>(self) -> Result<Self::Value, E> {
+        Ok(None)
+    }
+
+    fn visit_unit<E>(self) -> Result<Self::Value, E> {
+        Ok(None)
+    }
+
+    fn visit_some<D2: serde::Deserializer<'de>>(self, d: D2) -> Result<Self::Value, D2::Error> {
+        d.deserialize_any(self)
+    }
+
+    fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E> {
+        Ok(if v < 0 { None } else { self.check(u128::from(v as u64)) })
+    }
+
+    fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E> {
+        Ok(self.check(u128::from(v)))
+    }
+
+    fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E> {
+        // JSON has one number type; a container that emits `2.0` where an
+        // integer is expected is not an error worth rejecting a file over.
+        if !v.is_finite() || v < 0.0 {
+            return Ok(None);
+        }
+        Ok(self.check(v as u128))
+    }
+
+    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E> {
+        Ok(v.trim().parse::<u64>().ok().and_then(|n| self.check(u128::from(n))))
+    }
+}
+
+impl LenientInt {
+    fn check(&self, v: u128) -> Option<u64> {
+        if v < self.min || v > self.max {
+            None
+        } else {
+            u64::try_from(v).ok()
+        }
+    }
 }
 
 /// Parse the `avg_frame_rate` / `r_frame_rate` "num/den" form.
