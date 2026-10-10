@@ -131,5 +131,37 @@ cp "$OUT/bin/ffprobe" "$DEST/ffprobe-$TARGET_TRIPLE"
 log "result"
 "$DEST/ffmpeg-$TARGET_TRIPLE" -version 2>&1 | head -2
 ( cd "$DEST" && sha256sum "ffmpeg-$TARGET_TRIPLE" "ffprobe-$TARGET_TRIPLE" )
+
+# --- 5. smoke test ------------------------------------------------------
+# Linking successfully and passing the licence audit are not evidence that the
+# binary can do anything. Three separate builds passed both and then failed on
+# their first real command: a missing demuxer, an encoder renamed between
+# majors, and a pseudo-codec enabled on one side of the graph but not the
+# other. All three were only caught by running it.
+#
+# So run it: encode one second of a synthetic clip, then probe the result.
+# Anything missing from the configure line fails here rather than in a user's
+# export.
+log "5/5 smoke test"
+SMOKE="$WORK/smoke.mp4"
+rm -f "$SMOKE"
+if ! "$DEST/ffmpeg-$TARGET_TRIPLE" -hide_banner -loglevel error -y \
+      -f lavfi -i "testsrc2=size=160x90:rate=30:duration=1" \
+      -c:v libvpx-vp9 -b:v 100k -pix_fmt yuv420p \
+      "$SMOKE"; then
+  echo "SMOKE TEST FAILED: could not encode. The build is missing something" >&2
+  echo "the configure line needs, and it would have shipped broken." >&2
+  exit 1
+fi
+
+if ! "$DEST/ffprobe-$TARGET_TRIPLE" -v error -print_format json -show_streams "$SMOKE" \
+      | grep -q '"codec_name": *"vp9"'; then
+  echo "SMOKE TEST FAILED: probe did not report the expected codec" >&2
+  exit 1
+fi
+
+echo "smoke test passed: encoded and probed $(basename "$SMOKE")"
+rm -f "$SMOKE"
+
 echo
 echo "Record these in resources/sidecars/manifest.json"
