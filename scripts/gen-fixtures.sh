@@ -23,31 +23,33 @@ mkdir -p "$OUT"
 dur() { [ "$SMALL" = "1" ] && echo 2 || echo "$1"; }
 
 # A per-frame marker pattern so golden tests can identify a frame by its
-# content (§11.4). `drawtext` needs a font; fall back to a moving box when
-# none is available so the fixtures still generate on a bare container.
+# content (§11.4). `drawtext` needs a font; when it is unavailable the
+# fixtures still generate, just without a readable timecode burned in.
 if "$FFMPEG" -hide_banner -filters 2>/dev/null | grep -q drawtext; then
   MARKER="drawtext=text='%{pts\\:hms}':x=10:y=10:fontsize=48:fontcolor=white:box=1:boxcolor=black@0.6"
-  SRC="testsrc2=size=${2:-1920x1080}:rate=${3:-30}:duration=${4}"
 else
   echo "warning: no drawtext filter; fixtures will lack per-frame markers" >&2
   MARKER=""
-  SRC="testsrc2=size=${2:-1920x1080}:rate=${3:-30}:duration=${4}"
 fi
 
 gen() {
   local name="$1" size="$2" rate="$3" seconds="$4" vcodec="$5" extra="${6:-}"
   local out="$OUT/$name"
+  # The synthetic source is built per call from this function's arguments.
+  # Building it once at script scope would silently reuse the first
+  # resolution and rate for every fixture.
+  local src="testsrc2=size=${size}:rate=${rate}:duration=$(dur "$seconds")"
   echo "-> $out ($size @ $rate, $(dur "$seconds")s, $vcodec)"
   # shellcheck disable=SC2086
   if ! "$FFMPEG" -hide_banner -loglevel error -y \
-      -f lavfi -i "$SRC" \
+      -f lavfi -i "$src" \
       $([ -n "$MARKER" ] && echo "-vf $MARKER") \
       -c:v "$vcodec" $extra \
       -pix_fmt yuv420p \
       -t "$(dur "$seconds")" \
       "$out" 2>/dev/null; then
     echo "   (encoder $vcodec unavailable in this build, falling back to mpeg4)" >&2
-    "$FFMPEG" -hide_banner -loglevel error -y -f lavfi -i "$SRC" \
+    "$FFMPEG" -hide_banner -loglevel error -y -f lavfi -i "$src" \
       -c:v mpeg4 -q:v 4 -t "$(dur "$seconds")" "$out"
   fi
 }
@@ -66,16 +68,27 @@ gen "4k30_10min.mp4"     3840x2160 30 "$(dur 600)" libvpx-vp9 "-b:v 20M -deadlin
 gen "1080p60_5min.mp4"   1920x1080 60 "$(dur 300)" libvpx-vp9 "-b:v 6M -deadline realtime -cpu-used 8"
 
 # A still-image source for thumbnail and overlay-stream tests.
-echo "-> $OUT/thumb_source.webp"
+#
+# §7.4 will store thumbnails as WebP, but this build has a WebP *encoder*
+# (libwebp_anim) and no WebP *muxer*, so it cannot be written as a standalone
+# file here. PNG via the image2 muxer serves the same purpose for the fixture:
+# the thumbnail code cares about the decoded pixels and the sprite-strip
+# packing, not the container. WebP storage is exercised in Phase 2.
+echo "-> $OUT/thumb_source.png"
 "$FFMPEG" -hide_banner -loglevel error -y \
   -f lavfi -i "testsrc2=size=640x360:rate=1:duration=$(dur 10)" \
-  -c:v libwebp_anim -lossless 1 -loop 0 "$OUT/thumb_source.webp"
+  -frames:v 1 -c:v png "$OUT/thumb_source.png"
 
 # A 1 kHz tone for audio-only paths (mixer, loudness, peaks).
+#
+# Mono, not stereo. The synthetic source produces one channel, and converting
+# it to stereo needs the aresample filter, which is not in this build (it is
+# added in Phase 2 alongside the audio chunk cache). Producing a silent file
+# with a failed -ac 2 is worse than producing an honest mono one.
 echo "-> $OUT/tone_1khz.wav"
 "$FFMPEG" -hide_banner -loglevel error -y \
   -f lavfi -i "sine=frequency=1000:sample_rate=48000:duration=$(dur 10)" \
-  -ac 2 "$OUT/tone_1khz.wav"
+  "$OUT/tone_1khz.wav"
 
 echo
 echo "Fixtures generated in $OUT:"
