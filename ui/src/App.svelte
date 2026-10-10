@@ -1,16 +1,21 @@
-/**
- * Application shell.
- *
- * The shell is the only thing loaded at startup (§14.1). Quick Edit, Timeline
- * and Motion Studio are dynamic imports, so entering the app costs one small
- * chunk and nothing else. PixiJS is loaded by the timeline itself, when a
- * preview is first needed, rather than by the shell.
- *
- * §14.7: show the window shell within one second with a skeleton layout.
- * Everything below renders before any project data is fetched, because
- * fetching blocks the first paint.
- */
+<!--
+  Application shell.
 
+  NOTE: this must be an HTML comment. A JSDoc-style block above <script> in a
+  .svelte file is rendered into the page as visible text. It looks like a
+  harmless file header and it ships to users as a paragraph of source code.
+  There is a test (src/components/no-leaked-comments.test.ts) that fails the
+  build if this ever comes back.
+
+  The shell is the only thing loaded at startup. Quick Edit, Timeline and
+  Motion Studio are dynamic imports, so entering the app costs one small chunk
+  and nothing else. PixiJS is loaded by the timeline itself, when a preview is
+  first needed, rather than by the shell.
+
+  Startup budget: show the window shell within one second with a skeleton
+  layout. Everything below renders before any project data is fetched, because
+  fetching blocks the first paint.
+-->
 <script lang="ts">
   import { onMount } from 'svelte';
   import AppShell from './AppShell.svelte';

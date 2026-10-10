@@ -1,15 +1,19 @@
-/**
- * The window shell: chrome, view switching, and the Activity list.
- *
- * Every action routes through the command registry (`$state/commands.ts`), so
- * menus, the palette and tooltips cannot drift apart (§17).
- */
+<!--
+  The window shell: chrome, view switching, and the Activity list.
 
+  NOTE: this must be an HTML comment. A JSDoc-style block above <script> in a
+  .svelte file is rendered into the page as visible text -- which is exactly
+  what happened the first time this was written.
+
+  Every action routes through the command registry ($state/commands.ts), so
+  menus, the palette and tooltips cannot drift apart (design rule 17).
+-->
 <script lang="ts">
   import type { ViewId } from './state/views';
   import { VIEWS } from './state/views';
   import ActivityList from './components/ActivityList.svelte';
   import type { Component } from 'svelte';
+  import { onMount } from 'svelte';
 
   let current = $state<ViewId>('timeline');
 
@@ -31,10 +35,38 @@
     try {
       const mod = await loaders[id]();
       LoadedView = mod.default;
+    } catch (e) {
+      // A chunk that fails to load must not leave the window permanently on
+      // "Loading…" with no explanation and no way forward. Reset to the shell
+      // and say what happened.
+      LoadedView = null;
+      loadError = e instanceof Error ? e.message : String(e);
     } finally {
       loading = false;
     }
   }
+
+  let loadError = $state<string | null>(null);
+
+  // Load the first view.
+  //
+  // Without this the window shows "Loading…" forever: the default view is only
+  // fetched when the user clicks its tab, and nobody clicks the tab they are
+  // already on. The dynamic import is still deferred past first paint, which
+  // is what the code-splitting is for -- it just has to actually happen.
+  onMount(() => {
+    void (async () => {
+      loading = true;
+      try {
+        const mod = await loaders[current]();
+        LoadedView = mod.default;
+      } catch (e) {
+        loadError = e instanceof Error ? e.message : String(e);
+      } finally {
+        loading = false;
+      }
+    })();
+  });
 </script>
 
 <div class="shell">
@@ -63,6 +95,11 @@
   <main class="workspace">
     {#if LoadedView && !loading}
       <LoadedView />
+    {:else if loadError}
+      <div class="loading error" role="alert">
+        <p>This view could not be loaded.</p>
+        <code>{loadError}</code>
+      </div>
     {:else}
       <div class="loading" role="status">Loading…</div>
     {/if}
@@ -145,6 +182,20 @@
     display: grid;
     place-items: center;
     color: var(--fg-subtle);
+  }
+
+  .loading.error {
+    align-content: center;
+    gap: var(--space-2);
+    color: var(--danger);
+  }
+
+  .loading.error code {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    color: var(--fg-subtle);
+    max-width: 60ch;
+    text-align: center;
   }
 
   .statusbar {
