@@ -1,0 +1,42 @@
+{
+  "$comment": "Sidecar binary hashes. These do NOT verify upstream -- only the PGP signature in scripts/build-sidecar.sh does that. They exist so CI can detect when a rebuild drifts from what was reviewed and recorded here.",
+  "source": {
+    "version": "9.0.2",
+    "url": "https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz",
+    "sha256": "8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e",
+    "pgpFingerprint": "FCF986EA15E6E293A5644F10B4322F04D67658D8",
+    "$comment": "ffmpeg.org publishes a .asc signature, not a .sha256 file. The signature is the upstream check; this hash is recorded for reproducibility."
+  },
+  "license": {
+    "spdx": "LGPL-2.1-or-later",
+    "gplComponents": [],
+    "nonfreeComponents": [],
+    "$comment": "Audited at build time: scripts/build-sidecar.sh greps -buildconf for enable-gpl, enable-nonfree, libx264, libx265 and libfdk, and fails the build if any is present."
+  },
+  "linkedLibraries": {
+    "libvpx": "BSD-3-Clause",
+    "libopus": "BSD-3-Clause",
+    "dav1d": "BSD-2-Clause",
+    "libvorbis": "BSD-3-Clause",
+    "libwebp": "BSD-3-Clause",
+    "zlib": "Zlib",
+    "libogg": "BSD-3-Clause",
+    "libsharpyuv": "BSD-2-Clause"
+  },
+  "binaries": {
+    "ffmpeg-x86_64-unknown-linux-gnu": {
+      "sha256": "7a3493b401697c8864f7168d137374699b7078fc40465da03dfd663d0e15c80c",
+      "sizeBytes": 6803936,
+      "builtOn": "Debian 13, gcc 14.2.0",
+      "$comment": "REVIEWED BUILD. Does not include lavfi or the synthetic test sources; see the next entry for the fixture-capable build."
+    },
+    "ffprobe-x86_64-unknown-linux-gnu": {
+      "sha256": "e212d68f64f62a5ce1fb97d21634b2cd9706f70981d8edd06c692dfb7a242159",
+      "sizeBytes": 6627648,
+      "builtOn": "Debian 13, gcc 14.2.0"
+    }
+  },
+  "windows": {
+    "$comment": "Built by CI under MSYS2 with the same configure line. No Windows machine needed to produce a Windows package."
+  }
+}
