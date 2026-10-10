@@ -198,18 +198,25 @@ pub fn plan(
             layer_labels.push(vid);
         }
 
-        // One track becomes one layer; several clips are concatenated.
+        // Clips on one track are sequential, so they concatenate into a
+        // single layer. A track that is not sequential (clips overlapping or
+        // out of order) is a malformed project and is rejected by the model
+        // before it reaches here, so concat is the correct operation.
         match layer_labels.len() {
             0 => {}
             1 => video_labels.push(layer_labels[0].clone()),
             _ => {
                 let out = format!("layer{}", nodes.len());
+                // concat is an input-consuming filter: every input label
+                // must be written before it, and the result is named by the
+                // trailing [label]. Writing "layer=concat=..." instead
+                // produces "No such filter" from FFmpeg, because the label
+                // before the '=' is read as a filter name.
                 let parts: String =
                     layer_labels.iter().map(|l| format!("[{l}]")).collect();
                 let _ = write!(
                     filters,
-                    "{}=concat=n={}:v=1:a=0{parts};",
-                    out,
+                    "{parts}concat=n={}:v=1:a=0[{out}];",
                     layer_labels.len()
                 );
                 video_labels.push(out);
