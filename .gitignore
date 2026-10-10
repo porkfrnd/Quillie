@@ -1,0 +1,69 @@
+# Rust / Cargo
+/target
+**/target
+*.pdb
+
+# Sidecar binaries are build artifacts, not source.
+# Tracked by hash in resources/sidecars/manifest.json instead, so CI can tell a
+# clean rebuild from a drifted one. See scripts/build-sidecar.sh.
+crates/quillie-app/sidecars/ffmpeg-*
+crates/quillie-app/sidecars/ffprobe-*
+
+# Node / Svelte / Vite
+node_modules
+ui/dist
+ui/.vite
+.vite-inspect
+
+# Tauri build output
+/crates/quillie-app/target
+/src-tauri/target
+
+# Generated media fixtures. Tests generate these with FFmpeg's lavfi sources
+# (see tests/fixtures/gen.sh); committing binaries would bloat the repo.
+tests/fixtures/generated/
+*.mp4
+*.mov
+*.mkv
+*.webm
+*.ts
+*.wav
+*.mp3
+*.aac
+*.opus
+*.flac
+*.jpg
+*.jpeg
+*.png
+*.webp
+
+# Golden reference media is generated too, but the *expected* outputs are
+# checked in under tests/golden/. Those are small text/JSON/metric files and
+# ARE tracked; only large binary references are excluded.
+tests/golden/*.mp4
+tests/golden/*.mkv
+
+# Benchmark results are intentionally committed (the performance ratchet in
+# §15.1 needs a committed baseline). Large transient ones are not.
+bench/results/*.tmp
+bench/results/*.partial
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# Swarm/agent orchestration state. Session transcripts, evidence files and
+# locks are local tooling artefacts, not project source.
+.swarm/
+
+# Local scratch
+*.log
+.env
+.env.local
+node_modules/
