@@ -5,14 +5,19 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Quillie Tauri host: commands, filesystem, process supervision, audio."
+description = "Quillie host: commands, filesystem, process supervision, audio."
 
 [lib]
 name = "quillie_app"
 path = "src/lib.rs"
 
+[[bin]]
+name = "quillie"
+path = "src/main.rs"
+required-features = ["tauri-host"]
+
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2", features = [], optional = true }
 
 [dependencies]
 quillie-core = { path = "../quillie-core" }
@@ -20,10 +25,21 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
-tauri = { version = "2", features = [] }
-tauri-plugin-shell = "2"
+tempfile = "3"
+
+# The Tauri shell is optional on purpose. Everything except the window and
+# the IPC handlers -- filesystem, process supervision, audio -- compiles and
+# tests on a machine with no webview development packages installed, which is
+# the difference between `cargo test` running in 30 seconds and not at all.
+tauri = { version = "2", features = [], optional = true }
+
+[dev-dependencies]
+quillie-core = { path = "../quillie-core" }
 
 [features]
+default = []
+# The packaged application. Enabled by the Tauri build.
+tauri-host = ["dep:tauri", "dep:tauri-build"]
 # Bundled FFmpeg/ffprobe sidecars are only present in a packaged build.
 # `cargo test` on a dev checkout must work without them.
-default = []
+sidecars = []
