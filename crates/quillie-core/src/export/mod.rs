@@ -5,4 +5,4 @@
 
 pub mod graph;
 
-pub use graph::{plan, ExportGraph, Node, Profile};
+pub use graph::{plan, ExportGraph, Node, Profile, Unresolved};

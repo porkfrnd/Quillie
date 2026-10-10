@@ -64,6 +64,40 @@ pub enum Profile {
     Preview { width: u32, height: u32 },
 }
 
+/// A clip the planner could not resolve to a readable source file.
+///
+/// # Why this is tracked rather than skipped
+///
+/// A clip whose media is missing used to be skipped silently. For a preview
+/// that is defensible -- you want to keep working while a file is on a drive
+/// that is not plugged in. For an export it is not: FFmpeg renders everything
+/// else and the command succeeds, so the user gets a file that is silently
+/// missing content, and the only symptom is a hole in the middle of their
+/// video discovered after they have already delivered it.
+///
+/// Recording them lets the caller decide per profile. The export path refuses;
+/// the preview path degrades.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unresolved {
+    /// A deliberate placeholder: no source was ever linked.
+    Placeholder,
+    /// A link exists but no such entry exists in the project's media table.
+    BrokenLink,
+    /// The media entry exists but its file is not present on disk.
+    FileMissing,
+}
+
+impl std::fmt::Display for Unresolved {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Unresolved::Placeholder => "placeholder, no source linked",
+            Unresolved::BrokenLink => "media link points at a missing entry",
+            Unresolved::FileMissing => "file is not on disk",
+        };
+        f.write_str(s)
+    }
+}
+
 /// A planned render.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExportGraph {
@@ -76,6 +110,8 @@ pub struct ExportGraph {
     pub expected_duration: Ticks,
     pub profile: Profile,
     pub frame_rate: FrameRate,
+    /// Clips that were skipped, and why. See `Unresolved`.
+    pub unresolved: Vec<(crate::project::ClipId, Unresolved)>,
 }
 
 /// Format ticks as a plain decimal number of seconds, for FFmpeg `trim`.
@@ -126,6 +162,7 @@ pub fn plan(
     let mut nodes: Vec<Node> = Vec::new();
     let mut inputs: Vec<String> = Vec::new();
     let mut filters = String::new();
+    let mut unresolved: Vec<(crate::project::ClipId, Unresolved)> = Vec::new();
 
     let (range_start, range_end) = range.unwrap_or((Ticks::ZERO, sequence.duration()));
 
@@ -154,8 +191,21 @@ pub fn plan(
             if clip.end() <= range_start || clip.timeline_start >= range_end {
                 continue;
             }
-            let Some(media_id) = clip.media else { continue };
-            let Some(media) = project.media.get(&media_id) else { continue };
+            let Some(media_id) = clip.media else {
+                unresolved.push((clip.id, Unresolved::Placeholder));
+                continue;
+            };
+            let Some(media) = project.media.get(&media_id) else {
+                unresolved.push((clip.id, Unresolved::BrokenLink));
+                continue;
+            };
+            // Present in the project table but absent from the filesystem:
+            // most often a drive that is unplugged, or a relink that has not
+            // happened yet.
+            if !std::path::Path::new(&media.path).exists() {
+                unresolved.push((clip.id, Unresolved::FileMissing));
+                continue;
+            }
 
             let input = inputs.len();
             inputs.push(media.path.clone());
@@ -233,8 +283,18 @@ pub fn plan(
             if clip.end() <= range_start || clip.timeline_start >= range_end {
                 continue;
             }
-            let Some(media_id) = clip.media else { continue };
-            let Some(media) = project.media.get(&media_id) else { continue };
+            let Some(media_id) = clip.media else {
+                unresolved.push((clip.id, Unresolved::Placeholder));
+                continue;
+            };
+            let Some(media) = project.media.get(&media_id) else {
+                unresolved.push((clip.id, Unresolved::BrokenLink));
+                continue;
+            };
+            if !std::path::Path::new(&media.path).exists() {
+                unresolved.push((clip.id, Unresolved::FileMissing));
+                continue;
+            }
 
             let input = inputs.len();
             inputs.push(media.path.clone());
@@ -312,6 +372,7 @@ pub fn plan(
         nodes,
         inputs,
         filters,
+        unresolved,
         expected_duration,
         profile,
         frame_rate: rate,
@@ -411,13 +472,23 @@ mod tests {
     use uuid::Uuid;
 
     fn project_with_clips(n: usize) -> Project {
+        // The planner refuses to hand FFmpeg a path that is not on disk, so
+        // the sample media has to actually exist. One file is created lazily
+        // and reused: these tests assert on filter strings, not on I/O.
+        static REAL: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+        let path = REAL.get_or_init(|| {
+            let p = std::env::temp_dir().join(format!("quillie-graph-test-{}.mov", Uuid::new_v4()));
+            std::fs::write(&p, b"not really a mov").unwrap();
+            p
+        });
+
         let mut p = Project::new("t", FrameRate::new(30, 1), (1920, 1080));
         let media_id = Uuid::new_v4();
         p.media.insert(
             media_id,
             MediaRef {
                 id: media_id,
-                path: "/tmp/a.mov".into(),
+                path: path.display().to_string(),
                 fingerprint: Fingerprint {
                     size_bytes: 1,
                     mtime_unix: 0,

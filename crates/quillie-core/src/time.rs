@@ -275,10 +275,16 @@ fn divide_floor(a: i64, b: i64) -> i64 {
 
 fn divide_round_half_away(a: i64, b: i64) -> i64 {
     let half = b / 2;
+    // i128 intermediates. `a + half` overflows for `a` near i64::MAX and `-a`
+    // overflows for i64::MIN, and both are reachable from a hand-edited
+    // project file. In debug that is a panic; in release it is a silent wrap
+    // into a negative frame number, which is worse: it moves a playhead to
+    // the wrong place instead of refusing to draw it.
+    let (num, den, h) = (a as i128, b as i128, half as i128);
     if a >= 0 {
-        (a + half) / b
+        ((num + h) / den) as i64
     } else {
-        -((-a + half) / b)
+        (-((-num + h) / den)) as i64
     }
 }
 

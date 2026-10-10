@@ -14,7 +14,7 @@
 //! fails validation is discarded rather than shown to the user, because an
 //! export that silently has the wrong duration is worse than an error.
 
-use quillie_core::export::{plan, ExportGraph, Profile};
+use quillie_core::export::{plan, ExportGraph, Profile, Unresolved};
 use quillie_core::project::{ExportPreset, Project};
 use quillie_core::time::Ticks;
 use std::path::{Path, PathBuf};
@@ -34,6 +34,19 @@ pub enum ExportError {
     Validation(#[from] ProbeError),
     #[error("export failed validation: {0}")]
     Invalid(String),
+    /// At least one clip on the timeline could not be rendered.
+    ///
+    /// This is deliberately fatal. The alternative is to render everything
+    /// that *does* resolve and hand the user a file that is quietly missing
+    /// part of their timeline -- a failure they discover after delivering it,
+    /// with no error, no warning, and no clue which clip went missing. The
+    /// preview path still tolerates unresolved clips, because keeping the
+    /// timeline usable while a drive is unplugged is worth more there than
+    /// strictness.
+    #[error("{} clip(s) have no usable media: {}", .unresolved.len(), .unresolved.iter().map(|(id, why)| format!("{id} ({why})")).collect::<Vec<_>>().join(", "))]
+    UnresolvedMedia {
+        unresolved: Vec<(String, Unresolved)>,
+    },
 }
 
 /// What the validation actually checked, and what it found.
@@ -115,6 +128,18 @@ pub fn export(
     let sequence = project.primary_sequence();
     let graph = plan(project, sequence, None, Profile::Export { preset: preset.clone() })
         .ok_or(ExportError::NothingToRender)?;
+
+    // Refuse before anything is written, rather than after a successful
+    // render of an incomplete timeline. See ExportError::UnresolvedMedia.
+    if !graph.unresolved.is_empty() {
+        return Err(ExportError::UnresolvedMedia {
+            unresolved: graph
+                .unresolved
+                .iter()
+                .map(|(id, why)| (id.to_string(), *why))
+                .collect(),
+        });
+    }
 
     let ffmpeg = crate::process::sidecar_path("ffmpeg").ok_or(ExportError::NoFfmpeg)?;
 

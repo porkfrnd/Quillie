@@ -185,18 +185,26 @@ fn an_empty_sequence_is_refused_rather_than_producing_an_empty_file() {
 fn the_argument_builder_never_produces_a_shell_string() {
     // Every argument stays one element, including a filename containing shell
     // metacharacters.
+    //
+    // The file is real, because the planner now refuses to hand a path that is
+    // not on disk to FFmpeg (see ExportError::UnresolvedMedia). The safety
+    // property under test is about how the argument list is *built*, and that
+    // is only observable once the path resolves.
+    let nasty = tmp_out("a;rm -rf $HOME & echo `id`.mp4");
+    std::fs::write(&nasty, b"placeholder").unwrap();
+
     let mut p = project_with_one_clip(FrameRate::new(30, 1), 0, 1);
     let media_id = *p.media.keys().next().unwrap();
-    p.media.get_mut(&media_id).unwrap().path =
-        "/tmp/a;rm -rf $HOME & echo `id`.mp4".into();
+    p.media.get_mut(&media_id).unwrap().path = nasty.display().to_string();
 
     let graph = plan(&p, p.primary_sequence(), None, Profile::Export { preset: small_preset() })
         .unwrap();
     let args = build_args(&graph, Path::new("/tmp/out.mp4"));
+    let _ = std::fs::remove_dir_all(nasty.parent().unwrap());
 
     assert_eq!(args.iter().filter(|a| a.contains("rm -rf")).count(), 1);
     assert!(
-        args.iter().any(|a| a == "/tmp/a;rm -rf $HOME & echo `id`.mp4"),
+        args.iter().any(|a| *a == nasty.display().to_string()),
         "the whole filename must be a single argument, got: {args:?}"
     );
 }

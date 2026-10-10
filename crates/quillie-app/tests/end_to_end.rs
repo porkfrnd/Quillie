@@ -282,3 +282,72 @@ fn exporting_the_same_project_twice_is_byte_identical() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn an_export_with_one_unresolvable_clip_is_refused_not_silently_shortened() {
+    // The failure this prevents is quiet and expensive: a project whose
+    // second clip points at a file on an unplugged drive renders the first
+    // clip, FFmpeg exits 0, and the user receives a shorter video with no
+    // error anywhere. A long timeline losing half its length to a bad path is
+    // not something to discover after delivery.
+    let (mut p, seq) = imported_project();
+    let tid = p.primary_sequence().tracks[0].id;
+
+    // A clip with no source, sitting after the real one.
+    p.apply(EditOp::InsertClip {
+        sequence: seq,
+        track: tid,
+        index: 1,
+        clip: Box::new(Clip::new(
+            None,
+            Ticks::from_seconds(1),
+            Ticks::ZERO,
+            Ticks::from_seconds(1),
+        )),
+    })
+    .unwrap();
+
+    let dir = workdir("unresolved");
+    let out = dir.join("shortened.mp4");
+    let err = export(&p, &out, &small_preset())
+        .expect_err("an export missing a clip must not succeed");
+    assert!(
+        matches!(err, quillie_app::export::ExportError::UnresolvedMedia { .. }),
+        "expected a refusal naming the unresolved clip, got: {err}"
+    );
+    assert!(!out.exists(), "nothing may be written for a refused export");
+    assert!(
+        !out.with_extension("mp4.part").exists(),
+        "not even a partial file may be left behind"
+    );
+
+    // Give that clip a real source. Now the same timeline exports, and covers
+    // both seconds -- which is the point: nothing was lost, the export was
+    // correctly refused until it could be completed.
+    let bad = p.primary_sequence().track(tid).unwrap().clips[1].id;
+    p.apply(EditOp::DeleteClip { sequence: seq, track: tid, clip: bad })
+        .unwrap();
+    let real = *p.media.keys().next().expect("the import registered media");
+    p.apply(EditOp::InsertClip {
+        sequence: seq,
+        track: tid,
+        index: 1,
+        clip: Box::new(Clip::new(
+            Some(real),
+            Ticks::from_seconds(1),
+            Ticks::ZERO,
+            Ticks::from_seconds(1),
+        )),
+    })
+    .unwrap();
+
+    let fixed = dir.join("fixed.mp4");
+    let report = export(&p, &fixed, &small_preset()).expect("export once the clip is resolved");
+    assert!(
+        report.duration_seconds > 1.5,
+        "the full 2s timeline should now render, got {:.3}s",
+        report.duration_seconds
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
