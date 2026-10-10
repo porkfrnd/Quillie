@@ -60,6 +60,18 @@ impl Ticks {
         Ticks((ms / 1000.0 * TICKS_PER_SECOND as f64).round() as i64)
     }
 
+    /// Build a tick count from a duration in seconds, rounding to the nearest
+    /// tick.
+    ///
+    /// For container-reported durations, which arrive as floats and are the
+    /// other place float time legitimately enters the system.
+    pub fn from_secs_f64(secs: f64) -> Self {
+        if !secs.is_finite() || secs <= 0.0 {
+            return Ticks::ZERO;
+        }
+        Ticks((secs * TICKS_PER_SECOND as f64).round() as i64)
+    }
+
     /// Exact microseconds, when they land on a whole tick.
     pub const fn from_micros(us: i64) -> Self {
         Ticks(us * (TICKS_PER_SECOND / 1_000_000))

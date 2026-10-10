@@ -53,17 +53,6 @@ pub struct ValidationReport {
     pub audio_sample_rate: Option<u32>,
 }
 
-/// Absolute path of the sidecar with the target-triple suffix.
-fn sidecar_path(name: &str) -> Option<PathBuf> {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("sidecars");
-    let wanted = format!("{name}-");
-    std::fs::read_dir(&dir).ok()?.flatten().map(|e| e.path()).find(|p| {
-        p.file_name()
-            .map(|f| f.to_string_lossy().starts_with(&wanted))
-            .unwrap_or(false)
-    })
-}
-
 /// Build the full FFmpeg argument list for a graph.
 ///
 /// Arguments are a `Vec<String>` all the way through, so a filename with a
@@ -127,7 +116,7 @@ pub fn export(
     let graph = plan(project, sequence, None, Profile::Export { preset: preset.clone() })
         .ok_or(ExportError::NothingToRender)?;
 
-    let ffmpeg = sidecar_path("ffmpeg").ok_or(ExportError::NoFfmpeg)?;
+    let ffmpeg = crate::process::sidecar_path("ffmpeg").ok_or(ExportError::NoFfmpeg)?;
 
     // Write to a .part file and rename only after validation (§11.2). A failed
     // export must not leave something that looks like a finished file.
@@ -165,7 +154,7 @@ pub fn validate(
     path: &Path,
     preset: &ExportPreset,
 ) -> Result<ValidationReport, ExportError> {
-    let ffprobe = sidecar_path("ffprobe").ok_or(ExportError::NoFfmpeg)?;
+    let ffprobe = crate::process::sidecar_path("ffprobe").ok_or(ExportError::NoFfmpeg)?;
 
     let probe = SidecarCommand::new(
         ffprobe.display().to_string(),

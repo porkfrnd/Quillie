@@ -30,6 +30,8 @@ pub enum EditError {
     InvertedRange,
     #[error("track is locked")]
     TrackLocked,
+    #[error("media with id {0} is not in this project")]
+    UnknownMedia(uuid::Uuid),
 }
 
 /// A single change to the project.

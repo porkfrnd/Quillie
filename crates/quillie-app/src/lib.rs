@@ -18,6 +18,7 @@
 
 pub mod audio;
 pub mod capability_probe;
+pub mod media;
 pub mod export;
 pub mod io;
 pub mod process;

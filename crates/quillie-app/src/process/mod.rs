@@ -113,7 +113,7 @@ impl SidecarCommand {
         self
     }
 
-    /// Build the `std::process::Command`.
+/// Build the `std::process::Command`.
     ///
     /// Args are passed through as a slice; there is no shell, so nothing in a
     /// filename can be interpreted as syntax.
@@ -179,6 +179,22 @@ pub struct Output_ {
     /// The retained tail of stderr. Never shown to the user as the message;
     /// it is the `detail` field of a typed error (rule 8).
     pub stderr_tail: String,
+}
+
+/// Locate a bundled sidecar by its base name.
+///
+/// The binary carries a target-triple suffix (`ffmpeg-x86_64-unknown-linux-gnu`)
+/// so Tauri can ship several for different platforms at once, so the name is
+/// matched by prefix rather than hard-coded. That also means the same code
+/// works on Windows without a second lookup table.
+pub fn sidecar_path(name: &str) -> Option<std::path::PathBuf> {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("sidecars");
+    let wanted = format!("{name}-");
+    std::fs::read_dir(&dir).ok()?.flatten().map(|e| e.path()).find(|p| {
+        p.file_name()
+            .map(|f| f.to_string_lossy().starts_with(&wanted))
+            .unwrap_or(false)
+    })
 }
 
 /// Progress as reported by FFmpeg's `-progress pipe:1` stream.
