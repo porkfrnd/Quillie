@@ -230,8 +230,12 @@ impl Clip {
 
     /// Length on the timeline. Speed is applied here, which is why a speed ramp
     /// changes how long a clip occupies without changing its source range.
+    ///
+    /// Uses `constant_or(1.0)` rather than `constant()`: a keyframed speed must
+    /// not panic the duration computation, and treating it as 1x is the safe
+    /// assumption until the motion engine can evaluate it.
     pub fn duration(&self) -> Ticks {
-        let base = self.speed.constant().max(f32::MIN_POSITIVE);
+        let base = self.speed.constant_or(1.0).max(f32::MIN_POSITIVE);
         Ticks((self.source_duration().raw() as f32 / base).round() as i64)
     }
 
@@ -287,15 +291,35 @@ pub enum Animatable<T> {
 }
 
 impl<T: Copy> Animatable<T> {
-    /// The constant value, or a sensible default when this is not static.
+    /// The constant value.
     ///
-    /// Only for layout maths that must be defined before the motion engine
-    /// exists. Never use it to evaluate a renderable property.
+    /// # Panics
+    /// Panics when this is keyframed or driven. Use this only where a
+    /// non-animated layout decision has to be made before the motion engine
+    /// exists; never on a path that evaluates a renderable property.
     pub fn constant(&self) -> T {
         match self {
             Animatable::Static(v) => *v,
             _ => unreachable!("constant() on a non-static Animatable"),
         }
+    }
+
+    /// The constant value, or `fallback` when animated.
+    ///
+    /// The form to use in the export planner and anywhere else that runs
+    /// before the motion engine. Silently returning a default from
+    /// [`constant`](Self::constant) would hide a keyframed property behind a
+    /// plausible-looking number.
+    pub fn constant_or(&self, fallback: T) -> T {
+        match self {
+            Animatable::Static(v) => *v,
+            _ => fallback,
+        }
+    }
+
+    /// Is this a plain constant?
+    pub fn is_static(&self) -> bool {
+        matches!(self, Animatable::Static(_))
     }
 }
 
