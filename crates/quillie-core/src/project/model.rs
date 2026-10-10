@@ -539,6 +539,25 @@ pub struct ExportPreset {
 }
 
 impl ExportPreset {
+    /// The codec name ffprobe will report for this preset's video.
+    ///
+    /// The preset stores an FFmpeg *encoder* name (`libvpx_vp9`) while ffprobe
+    /// reports a *codec* name (`vp9`). Conflating them means either a
+    /// validation that never passes or one that never runs.
+    ///
+    /// Note the encoder name uses an underscore while FFmpeg 9 expects a
+    /// hyphen (`libvpx-vp9`); `ffmpeg_video_args` translates it at the point of
+    /// use rather than storing a name that only one of the two tools accepts.
+    pub fn expected_codec(&self) -> &str {
+        match self.video_codec.as_str() {
+            v if v.contains("vp9") => "vp9",
+            v if v.contains("av1") => "av1",
+            v if v.contains("x264") => "h264",
+            v if v.contains("x265") => "hevc",
+            other => other,
+        }
+    }
+
     pub fn landscape_1080p() -> Self {
         ExportPreset {
             id: Uuid::new_v4(),
