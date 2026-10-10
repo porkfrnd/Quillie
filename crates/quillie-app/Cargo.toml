@@ -27,10 +27,16 @@ thiserror = { workspace = true }
 uuid = { workspace = true }
 tempfile = "3"
 
-# The Tauri shell is optional on purpose. Everything except the window and
-# the IPC handlers -- filesystem, process supervision, audio -- compiles and
-# tests on a machine with no webview development packages installed, which is
-# the difference between `cargo test` running in 30 seconds and not at all.
+# The Tauri shell is behind the `tauri-host` feature so that filesystem and
+# process code still compiles and tests on a machine with no webview
+# development packages.
+#
+# `custom-protocol` is REQUIRED, not optional. Tauri's generate_context! sets
+# `dev: cfg!(not(feature = "custom-protocol"))`, so without this feature a
+# *release* build loads `build.devUrl` and every packaged binary shows
+# "Could not connect to localhost" instead of its own UI. It is enabled for
+# both dev and release on purpose: the Tauri CLI passes the custom protocol at
+# runtime in dev too.
 tauri = { version = "2", features = ["protocol-asset"], optional = true }
 tauri-plugin-shell = { version = "2", optional = true }
 
@@ -40,7 +46,7 @@ quillie-core = { path = "../quillie-core" }
 [features]
 default = []
 # The packaged application. Enabled by the Tauri build.
-tauri-host = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-shell"]
+tauri-host = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-shell", "tauri/custom-protocol"]
 # Tests that run the real ffprobe/ffmpeg sidecars against real generated
 # media. Off by default so `cargo test` works with no sidecar built.
 media = []
