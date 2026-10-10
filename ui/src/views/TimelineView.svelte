@@ -38,7 +38,10 @@
     let teardown: (() => void) | undefined;
 
     void (async () => {
-      if (!host) return;
+      // Captured once: `host` is bound by Svelte and TS cannot narrow it
+      // across the await, so the closure would otherwise see `T | null`.
+      const el = host;
+      if (!el) return;
 
       const { Application, Container, Graphics } = await import('pixi.js');
 
@@ -48,7 +51,7 @@
         // this is a measurable difference with no visible benefit.
         antialias: false,
         backgroundAlpha: 0,
-        resizeTo: host,
+        resizeTo: el,
         // Cap the device pixel ratio. A 4K display at dpr 3 quadruples the
         // fill cost for no legibility gain on 8px-tall clip rectangles.
         resolution: Math.min(globalThis.devicePixelRatio ?? 1, 2),
@@ -59,7 +62,7 @@
         return;
       }
       app.canvas.setAttribute('aria-hidden', 'true');
-      host.appendChild(app.canvas);
+      el.appendChild(app.canvas);
 
       // Three retained containers. Each redraws only when its flag is set.
       const content = new Graphics();
@@ -94,9 +97,8 @@
       };
 
       const onPointerDown = (e: PointerEvent): void => {
-        if (!host) return;
         // A click moves the playhead and dirties exactly one layer.
-        const rect = host.getBoundingClientRect();
+        const rect = el.getBoundingClientRect();
         const raw = xToTicks(viewport, e.clientX - rect.left);
         playhead = snap(raw, FPS_30, [], 0).ticks;
         flags.mark(Layer.Playhead);

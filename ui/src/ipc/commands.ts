@@ -19,23 +19,51 @@ export interface CommandError {
   readonly recoverable: boolean;
 }
 
-export async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
-  try {
-    return await invoke<T>(command, args);
-  } catch (e) {
-    throw toCommandError(e);
+/**
+ * A failure that came back from the host.
+ *
+ * The host returns `{ code, message, detail?, recoverable }` (rule 8), so
+ * errors cross the IPC boundary as data rather than as a thrown value of
+ * unknown shape. Wrapping them in a real Error keeps stack traces intact and
+ * keeps `only-throw-error` satisfied at the throw site.
+ */
+export class QuillieError extends Error {
+  readonly code: string;
+  readonly detail: string | undefined;
+  readonly recoverable: boolean;
+
+  constructor(e: CommandError) {
+    super(e.message);
+    this.name = 'QuillieError';
+    this.code = e.code;
+    this.detail = e.detail;
+    this.recoverable = e.recoverable;
   }
 }
 
-function toCommandError(e: unknown): CommandError {
-  if (typeof e === 'object' && e !== null && 'code' in e && 'message' in e) {
-    return e as CommandError;
+function isCommandError(e: unknown): e is CommandError {
+  return (
+    typeof e === 'object' &&
+    e !== null &&
+    'code' in e &&
+    'message' in e &&
+    typeof (e as { code: unknown }).code === 'string' &&
+    typeof (e as { message: unknown }).message === 'string'
+  );
+}
+
+export async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  let result: unknown;
+  try {
+    result = await invoke(command, args);
+  } catch (e) {
+    throw new QuillieError(
+      isCommandError(e)
+        ? e
+        : { code: 'unknown', message: 'Something went wrong.', recoverable: false },
+    );
   }
-  return {
-    code: 'unknown',
-    message: typeof e === 'string' ? e : 'Something went wrong.',
-    recoverable: false,
-  };
+  return result as T;
 }
 
 export const project = {
