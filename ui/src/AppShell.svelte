@@ -9,18 +9,19 @@
   import type { ViewId } from './state/views';
   import { VIEWS } from './state/views';
   import ActivityList from './components/ActivityList.svelte';
+  import type { Component } from 'svelte';
 
   let current = $state<ViewId>('timeline');
 
   // Views are code-split: each is a separate chunk loaded on first entry.
   // Nothing but the shell is in the entry bundle.
-  const loaders: Record<ViewId, () => Promise<{ default: unknown }>> = {
+  const loaders: Record<ViewId, () => Promise<{ default: Component }>> = {
     quick: () => import('./views/QuickEdit.svelte'),
     timeline: () => import('./views/TimelineView.svelte'),
     motion: () => import('./views/MotionStudio.svelte'),
   };
 
-  let LoadedView = $state<unknown>(null);
+  let LoadedView = $state<Component | null>(null);
   let loading = $state(false);
 
   async function switchView(id: ViewId): Promise<void> {
@@ -28,13 +29,12 @@
     current = id;
     loading = true;
     try {
-      LoadedView = await loaders[id]();
+      const mod = await loaders[id]();
+      LoadedView = mod.default;
     } finally {
       loading = false;
     }
   }
-
-  const svelte = { default: null };
 </script>
 
 <div class="shell">
@@ -61,8 +61,8 @@
   </header>
 
   <main class="workspace">
-    {#if LoadingView && !loading}
-      <svelte:component this={LoadedView} />
+    {#if LoadedView && !loading}
+      <LoadedView />
     {:else}
       <div class="loading" role="status">Loading…</div>
     {/if}

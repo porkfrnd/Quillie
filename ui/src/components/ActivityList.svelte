@@ -31,7 +31,7 @@
 
   function cancel(id: string): void {
     // Cancellation must reach the scheduler, not just hide the row (§9.1).
-    void import('$ipc/commands').then((m) => m.cancelJob(id));
+    void import('$ipc/commands').then((m) => m.jobs.cancel(id));
   }
 </script>
 
