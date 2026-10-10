@@ -21,27 +21,16 @@ ui/.vite
 
 # Generated media fixtures. Tests generate these with FFmpeg's lavfi sources
 # (see tests/fixtures/gen.sh); committing binaries would bloat the repo.
+#
+# Scoped to the fixtures directories on purpose. A bare `*.ts` would match every
+# TypeScript source file in the project -- it is meant to catch MPEG-TS video
+# and nothing else. Keeping these patterns inside the two directories they
+# actually describe means a stray export at the repo root still gets caught.
 tests/fixtures/generated/
-*.mp4
-*.mov
-*.mkv
-*.webm
-*.ts
-*.wav
-*.mp3
-*.aac
-*.opus
-*.flac
-*.jpg
-*.jpeg
-*.png
-*.webp
+tests/golden/media/
 
-# Golden reference media is generated too, but the *expected* outputs are
-# checked in under tests/golden/. Those are small text/JSON/metric files and
-# ARE tracked; only large binary references are excluded.
-tests/golden/*.mp4
-tests/golden/*.mkv
+# Golden *references* are small text/JSON/metric files and ARE tracked.
+# Only the large binary media they compare against is generated.
 
 # Benchmark results are intentionally committed (the performance ratchet in
 # §15.1 needs a committed baseline). Large transient ones are not.
