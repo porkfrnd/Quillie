@@ -12,7 +12,9 @@
 mod edit;
 mod model;
 mod schema;
+mod undo;
 
 pub use edit::{EditError, EditOp, Inverse, Patch, TimeRange, TrimEdge};
 pub use model::*;
 pub use schema::{migrate, MigrationError};
+pub use undo::UndoStack;
