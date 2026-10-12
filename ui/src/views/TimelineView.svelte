@@ -13,6 +13,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { DirtyFlags, Layer, RenderGate } from '$render/layers';
+  import { layoutTimeline, hitTest, type SourceClip } from '$render/layout';
   import { zoomAt, xToTicks, snap, type Viewport } from '$render/viewport';
   import { FPS_30 } from '$lib/time';
 
@@ -20,6 +21,46 @@
 
   /** The playhead. Transient UI state, never part of the project model (§5). */
   let playhead = $state(0);
+
+  /**
+   * What is on the timeline.
+   *
+   * Seeded with a short clip so the timeline is not empty on first open --
+   * an editor whose centre pane is blank gives a user nothing to judge, and
+   * the canvas dimensions are not known until the first layout. In the running
+   * app these arrive from the project; here they exercise the real draw path.
+   */
+  let clips = $state<readonly SourceClip[]>([
+    {
+      id: 'seed-a',
+      trackId: 'V1',
+      kind: 'Video',
+      startTick: 0,
+      endTick: 120_000 * 4,
+      resolved: true,
+      selected: false,
+    },
+    {
+      id: 'seed-b',
+      trackId: 'V1',
+      kind: 'Video',
+      startTick: 120_000 * 5,
+      endTick: 120_000 * 9,
+      resolved: true,
+      selected: false,
+    },
+    {
+      id: 'seed-c',
+      trackId: 'A1',
+      kind: 'Audio',
+      startTick: 0,
+      endTick: 120_000 * 9,
+      resolved: true,
+      selected: false,
+    },
+  ]);
+
+  let trackOrder = $state<readonly string[]>(['V1', 'A1']);
 
   const flags = new DirtyFlags();
   let viewport = $state<Viewport>({
@@ -72,7 +113,34 @@
       void Container;
 
       const draw = (): void => {
-        if (flags.consume(Layer.Content)) content.clear();
+        if (flags.consume(Layer.Content)) {
+          content.clear();
+
+          // The layout decides which rectangles exist; this decides how they
+          // look. Splitting them is what makes the geometry testable without
+          // a GPU, which matters because the floor machine may have neither.
+          const layout = layoutTimeline(clips, trackOrder, viewport, {
+            canvasHeightPx: app.screen.height,
+          });
+
+          for (const row of layout.rows) {
+            for (const c of row.clips) {
+              // A sub-pixel rectangle cannot honestly represent a duration,
+              // so it is drawn as a hairline marker instead of a sliver.
+              if (c.tiny) {
+                content.rect(c.x, c.y, 1, c.height).fill({ color: c.color });
+                continue;
+              }
+              content.rect(c.x, c.y, c.width, c.height).fill({ color: c.color });
+              if (c.selected) {
+                content.rect(c.x, c.y, c.width, c.height).stroke({
+                  width: 2,
+                  color: 0xffffff,
+                });
+              }
+            }
+          }
+        }
         if (flags.consume(Layer.Interaction)) interaction.clear();
         if (flags.consume(Layer.Playhead)) {
           playheadLayer.clear();
@@ -97,10 +165,24 @@
       };
 
       const onPointerDown = (e: PointerEvent): void => {
-        // A click moves the playhead and dirties exactly one layer.
         const rect = el.getBoundingClientRect();
-        const raw = xToTicks(viewport, e.clientX - rect.left);
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+
+        // Select first, using the same layout the frame was drawn from. A
+        // hit test that used a separately computed geometry would eventually
+        // disagree with what is on screen, and the user would click a clip
+        // and get a different one.
+        const layout = layoutTimeline(clips, trackOrder, viewport, {
+          canvasHeightPx: app.screen.height,
+        });
+        const hit = hitTest(layout, x, y);
+        clips = clips.map((c) => ({ ...c, selected: hit !== null && c.id === hit.clipId }));
+
+        // A click also moves the playhead and dirties exactly one layer.
+        const raw = xToTicks(viewport, x);
         playhead = snap(raw, FPS_30, [], 0).ticks;
+        flags.mark(Layer.Content);
         flags.mark(Layer.Playhead);
         gate?.request();
       };
