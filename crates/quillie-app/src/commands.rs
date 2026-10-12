@@ -46,8 +46,8 @@ fn with_both<T>(
     state: &AppState,
     f: impl FnOnce(&mut Project, &mut quillie_core::project::UndoStack) -> Result<T, WireError>,
 ) -> Result<T, WireError> {
-    let mut p = state.project.lock().expect("app state mutex poisoned");
-    let mut u = state.undo.lock().expect("undo mutex poisoned");
+    let mut p = lock_project(state)?;
+    let mut u = lock_undo(state)?;
     let project = p.as_mut().ok_or_else(not_loaded)?;
     f(project, &mut u)
 }
@@ -172,10 +172,16 @@ pub fn open_project_inner(state: &AppState, path: String) -> Result<usize, WireE
     let store = ProjectStore::new(path, None);
     let project: Project = store.load().map_err(WireError::from_store)?;
     let len = project.sequences.iter().map(|s| s.tracks.len()).sum();
-    *state.store.lock().expect("app state mutex poisoned") = Some(store);
-    *state.project.lock().expect("app state mutex poisoned") = Some(project);
+    // All three locks are taken before anything is mutated, so a failure part
+    // way through cannot leave the window holding a project it has no store
+    // for -- which would make every later save fail with `not_loaded`.
+    let mut store_guard = lock_store(state)?;
+    let mut project_guard = lock_project(state)?;
+    let mut undo_guard = lock_undo(state)?;
+    *store_guard = Some(store);
+    *project_guard = Some(project);
     // History belongs to the project that was open, not to the window.
-    state.undo.lock().expect("undo mutex poisoned").clear();
+    undo_guard.clear();
     state
         .dirty
         .store(false, std::sync::atomic::Ordering::Release);
@@ -190,10 +196,10 @@ pub fn save_project(state: State<'_, AppState>) -> Result<(), WireError> {
 /// Atomic: temp file in the same directory, fsync, rename. A crash mid-save
 /// leaves the previous version intact and a .bak behind it.
 pub fn save_project_inner(state: &AppState) -> Result<(), WireError> {
-    let store_guard = state.store.lock().expect("app state mutex poisoned");
+    let store_guard = lock_store(state)?;
     let store = store_guard.as_ref().ok_or_else(not_loaded)?;
 
-    let project_guard = state.project.lock().expect("app state mutex poisoned");
+    let project_guard = lock_project(state)?;
     let project = project_guard.as_ref().ok_or_else(not_loaded)?;
 
     store.save(project).map_err(WireError::from_store)?;
@@ -244,7 +250,7 @@ pub fn import_media_inner(
     state: &AppState,
     paths: Vec<String>,
 ) -> Result<ImportOutcome, WireError> {
-    let mut project_guard = state.project.lock().expect("app state mutex poisoned");
+    let mut project_guard = lock_project(state)?;
     let project = project_guard.as_mut().ok_or_else(not_loaded)?;
 
     let mut out = Vec::with_capacity(paths.len());
@@ -288,7 +294,7 @@ pub fn import_media_inner(
     // which inverses survive a media-table change, drop the history -- an undo
     // step that silently reverts only half of what the user did is worse than
     // one that is not offered.
-    state.undo.lock().expect("undo mutex poisoned").clear();
+    lock_undo(state)?.clear();
 
     state.dirty.store(true, std::sync::atomic::Ordering::Release);
 
@@ -325,7 +331,7 @@ pub fn export_video_inner(
     height: u32,
     video_bitrate_bps: u64,
 ) -> Result<ExportSummary, WireError> {
-    let project_guard = state.project.lock().expect("app state mutex poisoned");
+    let project_guard = lock_project(state)?;
     let project = project_guard.as_ref().ok_or_else(not_loaded)?;
 
     // The custom preset inherits the working defaults (codecs, audio) and
@@ -446,6 +452,49 @@ fn not_loaded() -> WireError {
         detail: None,
         recoverable: false,
     }
+}
+
+/// Recover from a poisoned lock instead of aborting the process.
+///
+/// A mutex is poisoned when a thread panics while holding it. The obvious
+/// `.expect("mutex poisoned")` turns the *next* command into a second panic,
+/// and because Tauri commands run on the runtime, that unwinds the backend
+/// process: the user loses the window, and with it any unsaved project.
+///
+/// The state behind a poisoned lock is usually still perfectly consistent --
+/// poisoning records that a panic happened, not that the data is corrupt -- so
+/// the data is recovered and the condition is reported. `PoisonError::into_inner`
+/// is the standard way to say "I accept the risk".
+fn poisoned(what: &str) -> WireError {
+    WireError {
+        code: "internal",
+        message: "Quillie hit an internal error and recovered. Please save your project.".into(),
+        detail: Some(format!("{what} was poisoned by an earlier panic; state recovered")),
+        // Not recoverable by retrying the same call -- the user has to be told
+        // something went wrong, but the window still works.
+        recoverable: false,
+    }
+}
+
+/// Lock the project, mapping poisoning to a wire error.
+fn lock_project(
+    state: &AppState,
+) -> Result<std::sync::MutexGuard<'_, Option<Project>>, WireError> {
+    state.project.lock().map_err(|_| poisoned("project state"))
+}
+
+/// Lock the undo stack, mapping poisoning to a wire error.
+fn lock_undo(
+    state: &AppState,
+) -> Result<std::sync::MutexGuard<'_, quillie_core::project::UndoStack>, WireError> {
+    state.undo.lock().map_err(|_| poisoned("undo stack"))
+}
+
+/// Lock the store, mapping poisoning to a wire error.
+fn lock_store(
+    state: &AppState,
+) -> Result<std::sync::MutexGuard<'_, Option<ProjectStore>>, WireError> {
+    state.store.lock().map_err(|_| poisoned("project store"))
 }
 
 /// Start the application.

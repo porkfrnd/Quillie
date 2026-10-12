@@ -114,7 +114,11 @@
   .shell {
     display: flex;
     flex-direction: column;
-    height: 100vh;
+    /* `100%` of a parent that is already `height: 100%`, not `100vh`.
+       In a windowed desktop app `vh` is the full display height, which is
+       larger than the window: the shell would extend past the bottom edge and
+       put a scrollbar on a view that is supposed to be fixed. */
+    height: 100%;
     background: var(--bg);
     color: var(--fg);
   }

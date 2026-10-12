@@ -68,7 +68,15 @@ export async function call<T>(command: string, args?: Record<string, unknown>): 
 
 export const project = {
   open: (path: string) => call<number>('open_project', { path }),
-  save: (id: number) => call<void>('save_project', { id }),
+  /**
+   * Takes no argument.
+   *
+   * This used to pass an `id`, which the host has never accepted: the Rust
+   * command is `save_project(state)` and saves whatever project is open. A
+   * phantom argument forces callers to invent a value that means nothing and
+   * hides the fact that there is exactly one open project.
+   */
+  save: () => call<void>('save_project'),
 };
 
 /** One file that came in from disk. Mirrors the host's `ImportedSummary`. */
@@ -169,8 +177,4 @@ export const editing = {
   apply: (op: EditOp) => call<UndoState>('apply_edit', { op }),
   undo: () => call<UndoState>('undo'),
   redo: () => call<UndoState>('redo'),
-};
-
-export const jobs = {
-  cancel: (jobId: string) => call<void>('cancel_job', { jobId }),
 };

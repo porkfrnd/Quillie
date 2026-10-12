@@ -342,7 +342,7 @@ const { Application, Container, Graphics } = await import('pixi.js');
     color: var(--fg-muted);
     background: var(--bg-raised);
     border: 1px solid var(--border);
-    border-radius: var(--radius-1);
+    border-radius: var(--radius-sm);
     /* The canvas sits underneath; the message has to be readable over it. */
     pointer-events: none;
   }

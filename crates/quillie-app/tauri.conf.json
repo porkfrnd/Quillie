@@ -7,7 +7,8 @@
     "beforeDevCommand": "npm --prefix ../ui run dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "npm --prefix ../ui run build",
-    "frontendDist": "../../ui/dist"
+    "frontendDist": "../../ui/dist",
+    "features": ["tauri-host", "media"]
   },
   "app": {
     "windows": [

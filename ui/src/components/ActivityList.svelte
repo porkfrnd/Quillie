@@ -25,10 +25,13 @@
   // the component a second source of truth for something it does not own.
   let { jobs = [] as readonly Job[] }: { jobs?: readonly Job[] } = $props();
 
-  function cancel(id: string): void {
-    // Cancellation must reach the scheduler, not just hide the row (§9.1).
-    void import('$ipc/commands').then((m) => m.jobs.cancel(id));
-  }
+  // No cancel button.
+  //
+  // This used to call `jobs.cancel`, which invoked a `cancel_job` command that
+  // does not exist -- the button threw only when a job was actually running,
+  // which is why no test caught it. There is still no job executor on the host,
+  // so a cancel button has nothing to cancel; it is reinstated when the
+  // scheduler actually runs jobs, with a test that the command exists.
 </script>
 
 {#if jobs.length === 0}
@@ -55,13 +58,7 @@
         <!-- Text, not just a bar. -->
         <span class="pct">{Math.round(job.progress * 100)}%</span>
 
-        {#if job.state === 'Running' || job.state === 'Queued'}
-          <button type="button" class="cancel" onclick={() => cancel(job.id)}>
-            Cancel
-          </button>
-        {:else}
-          <span class="state">{job.state}</span>
-        {/if}
+        <span class="state">{job.state}</span>
       </li>
     {/each}
   </ul>
@@ -118,21 +115,5 @@
     color: var(--fg-subtle);
     font-variant-numeric: tabular-nums;
     min-width: 32px;
-  }
-
-  .cancel {
-    appearance: none;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: transparent;
-    color: var(--fg-muted);
-    font: inherit;
-    padding: 0 var(--space-2);
-    cursor: pointer;
-  }
-
-  .cancel:hover {
-    background: var(--bg-hover);
-    color: var(--fg);
   }
 </style>
