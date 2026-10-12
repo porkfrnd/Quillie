@@ -71,6 +71,106 @@ export const project = {
   save: (id: number) => call<void>('save_project', { id }),
 };
 
+/** One file that came in from disk. Mirrors the host's `ImportedSummary`. */
+export interface ImportedMediaSummary {
+  readonly media_id: string;
+  readonly file_name: string;
+  readonly duration_seconds: number;
+  readonly width: number | null;
+  readonly height: number | null;
+  readonly codec: string | null;
+  readonly vfr: boolean;
+  readonly rotation: number;
+  readonly proxy_reason: string | null;
+}
+
+/**
+ * The result of importing a selection.
+ *
+ * `failed` is populated alongside `imported` rather than thrown, because
+ * dropping nine good files because the tenth was corrupt is a worse outcome
+ * than importing nine and telling the user about the tenth.
+ */
+export interface ImportOutcome {
+  readonly imported: readonly ImportedMediaSummary[];
+  readonly failed?: readonly string[];
+}
+
+export interface ExportSummary {
+  readonly duration_seconds: number;
+  readonly planned_seconds: number;
+  readonly width: number | null;
+  readonly height: number | null;
+  readonly codec: string | null;
+}
+
+/**
+ * Whether undo and redo are available.
+ *
+ * The host decides this, because only it knows whether the top of the stack is
+ * a no-op inverse. Guessing in the UI is how a button ends up enabled and
+ * doing nothing.
+ */
+export interface UndoState {
+  readonly can_undo: boolean;
+  readonly can_redo: boolean;
+}
+
+/**
+ * An edit, as the host's `EditOp` serialises it.
+ *
+ * The Rust enum is `#[serde(tag = "op", rename_all = "snake_case")]`, so the
+ * discriminant is an `op` field and every variant name is snake_case. This type
+ * mirrors that exactly rather than inventing its own shape -- a mismatch here
+ * would surface as an op the host silently fails to parse, which is the worst
+ * kind of boundary bug.
+ *
+ * `Ticks` is a newtype over i64 and serialises as a bare integer, so `to`/`at`
+ * are plain numbers measured in ticks.
+ */
+export type EditOp =
+  | {
+      readonly op: 'insert_clip';
+      sequence: string;
+      track: string;
+      index: number;
+      clip: unknown;
+    }
+  | { readonly op: 'delete_clip'; sequence: string; track: string; clip: string }
+  | { readonly op: 'move_clip'; sequence: string; track: string; clip: string; to: number }
+  | {
+      readonly op: 'trim_clip';
+      sequence: string;
+      track: string;
+      clip: string;
+      edge: 'in' | 'out';
+      to: number;
+    }
+  | { readonly op: 'split_clip'; sequence: string; track: string; clip: string; at: number };
+
+export const media = {
+  import: (paths: readonly string[]) => call<ImportOutcome>('import_media', { paths: [...paths] }),
+};
+
+export const render = {
+  // Argument keys are camelCase: Tauri converts them to the snake_case
+  // parameter names on the Rust side. A snake_case key here reaches the host
+  // as `None` and the export silently runs at the wrong bitrate.
+  export: (path: string, width: number, height: number, videoBitrateBps: number) =>
+    call<ExportSummary>('export_video', {
+      path,
+      width,
+      height,
+      videoBitrateBps,
+    }),
+};
+
+export const editing = {
+  apply: (op: EditOp) => call<UndoState>('apply_edit', { op }),
+  undo: () => call<UndoState>('undo'),
+  redo: () => call<UndoState>('redo'),
+};
+
 export const jobs = {
   cancel: (jobId: string) => call<void>('cancel_job', { jobId }),
 };

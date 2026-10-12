@@ -432,6 +432,62 @@ fn add_real_media(p: &mut Project) -> Uuid {
     add_media_entry(p, &path.to_string_lossy())
 }
 
+#[test]
+fn the_ui_wire_format_deserialises_into_an_edit_op() {
+    // The UI cannot call Rust, so it cannot be type-checked against this enum.
+    // The contract between `ui/src/ipc/commands.ts` and this file is therefore
+    // maintained by these two tests rather than by the compiler -- which means
+    // the exact strings are the thing to pin.
+    //
+    // If the serde attributes on `EditOp` or `TrimEdge` ever change, this fails
+    // and the TypeScript union has to change with it.
+    let raw = r#"{
+        "op": "trim_clip",
+        "sequence": "0192f0a1-0000-7000-8000-000000000001",
+        "track":   "0192f0a1-0000-7000-8000-000000000002",
+        "clip":    "0192f0a1-0000-7000-8000-000000000003",
+        "edge": "in",
+        "to": 240000
+    }"#;
+    let op: EditOp = serde_json::from_str(raw).expect("the UI's trim must deserialize");
+    match op {
+        EditOp::TrimClip { edge, to, .. } => {
+            assert_eq!(edge, TrimEdge::In);
+            // 240000 ticks is exactly 2s at the 1/120000 timebase, and it
+            // arrives as a bare integer because Ticks has no serde wrapper.
+            assert_eq!(to, Ticks::from_seconds(2));
+        }
+        other => panic!("expected a trim, got {other:?}"),
+    }
+
+    // The snake_case discriminator, for a variant with no nested enum.
+    let raw = r#"{
+        "op": "delete_clip",
+        "sequence": "0192f0a1-0000-7000-8000-000000000001",
+        "track":   "0192f0a1-0000-7000-8000-000000000002",
+        "clip":    "0192f0a1-0000-7000-8000-000000000003"
+    }"#;
+    let op: EditOp = serde_json::from_str(raw).expect("the UI's delete must deserialize");
+    assert!(matches!(op, EditOp::DeleteClip { .. }));
+}
+
+#[test]
+fn a_wire_format_mismatch_is_an_error_and_not_a_defaulted_op() {
+    // If the UI and the host ever disagree about the discriminant, the parse
+    // must fail loudly. A `#[serde(default)]` that silently produced some
+    // other variant would apply an edit the user did not ask for.
+    for wrong in [
+        r#"{"kind":"delete_clip","sequence":"0192f0a1-0000-7000-8000-000000000001","track":"0192f0a1-0000-7000-8000-000000000002","clip":"0192f0a1-0000-7000-8000-000000000003"}"#,
+        r#"{"op":"deleteClip","sequence":"0192f0a1-0000-7000-8000-000000000001","track":"0192f0a1-0000-7000-8000-000000000002","clip":"0192f0a1-0000-7000-8000-000000000003"}"#,
+        r#"{"op":"delete_clip","sequence":"0192f0a1-0000-7000-8000-000000000001","track":"0192f0a1-0000-7000-8000-000000000002"}"#,
+    ] {
+        assert!(
+            serde_json::from_str::<EditOp>(wrong).is_err(),
+            "a mismatched wire format must not deserialize: {wrong}"
+        );
+    }
+}
+
 fn add_media_entry(p: &mut Project, path: &str) -> Uuid {
     let id = Uuid::new_v4();
     p.media.insert(
