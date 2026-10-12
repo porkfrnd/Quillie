@@ -115,7 +115,16 @@ export function layoutTimeline(
   viewport: Viewport,
   options: { readonly canvasHeightPx?: number } = {},
 ): Layout {
-  const canvasHeight = options.canvasHeightPx ?? Number.POSITIVE_INFINITY;
+  // A non-positive height means "not known yet", which is the normal state on
+  // the first draw: the canvas has not been laid out, so its height is 0.
+  //
+  // Treating that as "nothing fits" is what makes a timeline render blank on
+  // open and stay blank, because the element does not resize afterwards and
+  // so nothing schedules the redraw that would fix it. A caller that has a
+  // real height still gets the skipping; a caller that does not gets a
+  // correct frame.
+  const raw = options.canvasHeightPx ?? Number.POSITIVE_INFINITY;
+  const canvasHeight = raw > 0 ? raw : Number.POSITIVE_INFINITY;
   const range = visibleRange(viewport);
 
   const rows: LayoutRow[] = [];

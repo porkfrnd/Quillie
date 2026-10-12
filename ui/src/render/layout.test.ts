@@ -172,6 +172,38 @@ describe('layoutTimeline', () => {
     expect(wide.rows[0]?.clips[0]?.tiny).toBe(false);
   });
 
+  it('draws a full frame when the canvas height is not known yet', () => {
+    // Regression: `app.screen.height` is 0 on the first frame because the
+    // canvas has not been laid out yet. The layout used to break out of the
+    // track loop when `y > canvasHeight`, so a height of 0 meant "nothing
+    // fits" and the timeline opened blank -- and stayed blank, because the
+    // element does not resize afterwards and so nothing scheduled the redraw
+    // that would have corrected it.
+    for (const h of [0, -1, undefined]) {
+      const l = layoutTimeline(
+        [clip({ id: 'a' }), clip({ id: 'b', startTick: SECOND })],
+        ['V1', 'A1'],
+        viewport(),
+        { canvasHeightPx: h },
+      );
+      expect(l.rows, `canvasHeightPx=${h}`).toHaveLength(2);
+      expect(l.drawnClips, `canvasHeightPx=${h}`).toBe(2);
+    }
+  });
+
+  it('still skips tracks below a known canvas height', () => {
+    // The optimisation must survive the fix above, or long projects pay for
+    // rows nobody can see.
+    const tracks = Array.from({ length: 10 }, (_, i) => `T${i}`);
+    const l = layoutTimeline(
+      tracks.map((t) => clip({ id: t, trackId: t })),
+      tracks,
+      viewport(),
+      { canvasHeightPx: 200 },
+    );
+    expect(l.rows).toHaveLength(4);
+  });
+
   it('keeps a stable order so redraws do not shimmer', () => {
     const clips = [
       clip({ id: 'b', startTick: SECOND * 2 }),
