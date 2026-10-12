@@ -7,6 +7,25 @@
 //! Instead the host registers a `quillie://` scheme and the UI requests media
 //! by URL. The webview's own image and media decoders handle the payload, so
 //! the bytes go straight from Rust to the compositor with no JS involvement.
+//!
+//! # NOT YET WIRED — read this before trusting preview code
+//!
+//! This module is **not registered** with the Tauri builder. `run()` never
+//! calls `register_uri_scheme_protocol`, so a `quillie://resource/...` URL
+//! resolves to nothing.
+//!
+//! `ui/src/render/preview.ts` builds exactly those URLs, and its tests assert
+//! they are well-formed — which is true, and proves nothing about whether any
+//! of them load. Preview playback therefore does not work yet, and the reason
+//! is this, not the path selection logic.
+//!
+//! Two things are missing, and both are real work rather than wiring:
+//!   1. nothing decodes video frames yet, so the store is always empty;
+//!   2. the scheme handler itself is not registered.
+//!
+//! Registering the handler before (1) would change a silent failure into an
+//! explicit 404, which is worth doing when frames exist. Doing it now would be
+//! registering an endpoint for a store that can never be populated.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -33,37 +52,39 @@ pub struct ResourceStore {
 }
 
 impl ResourceStore {
+    /// Take the lock, recovering from poisoning.
+    ///
+    /// Poisoning means some other thread panicked while holding this lock; it
+    /// does not mean the map is inconsistent, because every mutation here is a
+    /// single insert, remove or clone. Aborting the backend over a cache
+    /// lookup would be strictly worse than serving a slightly stale read.
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Resource>> {
+        self.entries.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
 
     pub fn put(&self, id: impl Into<String>, bytes: Vec<u8>, mime: &'static str) {
-        self.entries
-            .lock()
-            .expect("resource store mutex poisoned")
+        self.lock()
             .insert(id.into(), Resource { bytes: Arc::new(bytes), mime });
     }
 
     pub fn get(&self, id: &str) -> Option<Resource> {
-        self.entries
-            .lock()
-            .expect("resource store mutex poisoned")
-            .get(id)
-            .cloned()
+        self.lock().get(id).cloned()
     }
 
     /// Drop a resource and report how many bytes were released.
     pub fn evict(&self, id: &str) -> usize {
-        self.entries
-            .lock()
-            .expect("resource store mutex poisoned")
+        self.lock()
             .remove(id)
             .map(|r| r.bytes.len())
             .unwrap_or(0)
     }
 
     pub fn len(&self) -> usize {
-        self.entries.lock().expect("resource store mutex poisoned").len()
+        self.lock().len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -71,9 +92,7 @@ impl ResourceStore {
     }
 
     pub fn bytes_used(&self) -> usize {
-        self.entries
-            .lock()
-            .expect("resource store mutex poisoned")
+        self.lock()
             .values()
             .map(|r| r.bytes.len())
             .sum()
