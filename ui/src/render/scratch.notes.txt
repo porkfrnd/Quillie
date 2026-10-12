@@ -1,0 +1,4 @@
+// Intentionally empty. This file was a scratch pad used to diagnose the
+// track-colour bug; its assertions now live in layout.test.ts, which asserts
+// the same thing as a permanent regression guard.
+export {};
