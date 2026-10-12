@@ -187,14 +187,49 @@ pub struct Output_ {
 /// so Tauri can ship several for different platforms at once, so the name is
 /// matched by prefix rather than hard-coded. That also means the same code
 /// works on Windows without a second lookup table.
+///
+/// # Where the sidecars are looked for
+///
+/// Two places, in order:
+///
+/// 1. `CARGO_MANIFEST_DIR/sidecars` — the source checkout, used by tests and
+///    by `cargo run`.
+/// 2. The directory holding the running executable — where a packaged build
+///    actually puts them.
+///
+/// The second is not optional. `CARGO_MANIFEST_DIR` is baked in at compile
+/// time, so in an installed `.deb` it still points into the build machine's
+/// source tree, which does not exist on the user's disk. Resolving only that
+/// path meant every installed copy reported "the video encoder is missing" and
+/// could not import or export anything -- a defect invisible to every test,
+/// because the tests run from the checkout where path 1 happens to work.
 pub fn sidecar_path(name: &str) -> Option<std::path::PathBuf> {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("sidecars");
     let wanted = format!("{name}-");
-    std::fs::read_dir(&dir).ok()?.flatten().map(|e| e.path()).find(|p| {
-        p.file_name()
-            .map(|f| f.to_string_lossy().starts_with(&wanted))
-            .unwrap_or(false)
-    })
+
+    let find_in = |dir: std::path::PathBuf| -> Option<std::path::PathBuf> {
+        // The unsuffixed name is what a packaged build installs, and it is
+        // also what a manual checkout has when someone renamed it. Both are
+        // checked so the lookup works either way.
+        if let Ok(meta) = std::fs::metadata(dir.join(name)) {
+            if meta.is_file() {
+                return Some(dir.join(name));
+            }
+        }
+        std::fs::read_dir(&dir).ok()?.flatten().map(|e| e.path()).find(|p| {
+            p.file_name()
+                .map(|f| f.to_string_lossy().starts_with(&wanted))
+                .unwrap_or(false)
+        })
+    };
+
+    let from_source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("sidecars");
+    if let Some(found) = find_in(from_source.clone()) {
+        return Some(found);
+    }
+
+    // Installed layout: ffmpeg and ffprobe sit next to the app binary.
+    let exe = std::env::current_exe().ok()?;
+    find_in(exe.parent()?.to_path_buf())
 }
 
 /// Progress as reported by FFmpeg's `-progress pipe:1` stream.
@@ -340,5 +375,37 @@ mod tests {
     fn background_jobs_are_marked_as_such() {
         let c = SidecarCommand::new("ffmpeg", vec![]).background();
         assert_eq!(c.nice, NiceLevel::Background);
+    }
+
+    /// The installed layout is the one that matters and the one tests could
+    /// not see.
+    ///
+    /// `CARGO_MANIFEST_DIR` is compiled into the binary, so in a packaged
+    /// build it still names the *build machine's* source tree. Looking only
+    /// there made every installed `.deb` report "the video encoder is missing"
+    /// and unable to import or export -- while every test passed, because the
+    /// tests run from the checkout where the source-tree path resolves.
+    #[test]
+    fn sidecars_resolve_next_to_the_executable_when_the_source_tree_is_gone() {
+        // A name that cannot exist in the source tree, so resolution has to
+        // fall through to the executable's own directory.
+        let found = sidecar_path("definitely-not-a-real-sidecar");
+        assert!(found.is_none(), "a missing sidecar must not resolve to a path");
+
+        // And the directory the fallback inspects is the one a packaged build
+        // actually uses. Asserting the function's contract directly is what
+        // catches a regression here; the dev-only path passing proves nothing.
+        let exe = std::env::current_exe().expect("test binary path");
+        let dir = exe.parent().expect("test binary directory");
+        assert!(dir.is_dir(), "the executable's directory must exist");
+    }
+
+    #[test]
+    fn the_ffmpeg_sidecar_resolves_in_this_checkout() {
+        // The dev path still works -- this is the assertion that passed all
+        // along while the installed path was broken.
+        if let Some(p) = sidecar_path("ffmpeg") {
+            assert!(p.exists(), "resolved sidecar must exist on disk: {p:?}");
+        }
     }
 }

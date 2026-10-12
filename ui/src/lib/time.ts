@@ -62,11 +62,18 @@ export function secondsToTicks(seconds: number): number {
 /** `HH:MM:SS:FF` or `MM:SS.mmm`, whichever the duration calls for. */
 export function formatTimecode(ticks: number, rate: FrameRate): string {
   const tpf = ticksPerFrame(rate);
-  const totalFrames = Math.max(0, Math.floor(ticks / tpf));
-  const fps = rate.num / rate.den;
+  // A frame rate the model should have rejected can still reach the display
+  // from a malformed file. Without this the timecode renders "NaN:NaN:NaN:NaN",
+  // which is worse than showing nothing: it looks like the app is broken
+  // rather than like the project is.
+  if (!Number.isFinite(tpf) || tpf <= 0) return '00:00:00:00';
 
-  const frames = totalFrames % Math.round(fps);
-  const totalSeconds = Math.floor(totalFrames / Math.round(fps));
+  const fps = Math.round(rate.num / rate.den);
+  if (!Number.isFinite(fps) || fps <= 0) return '00:00:00:00';
+
+  const totalFrames = Math.max(0, Math.floor(ticks / tpf));
+  const frames = totalFrames % fps;
+  const totalSeconds = Math.floor(totalFrames / fps);
   const seconds = totalSeconds % 60;
   const minutes = Math.floor(totalSeconds / 60) % 60;
   const hours = Math.floor(totalSeconds / 3600);
