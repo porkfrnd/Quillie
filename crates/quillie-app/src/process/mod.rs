@@ -227,9 +227,27 @@ pub fn sidecar_path(name: &str) -> Option<std::path::PathBuf> {
         return Some(found);
     }
 
-    // Installed layout: ffmpeg and ffprobe sit next to the app binary.
-    let exe = std::env::current_exe().ok()?;
-    find_in(exe.parent()?.to_path_buf())
+    // Installed layout, part 1: ffmpeg sits next to the app binary. This is
+    // what a Windows build and a self-contained bundle produce.
+    if let Some(dir) = std::env::current_exe().ok().as_deref().and_then(std::path::Path::parent) {
+        if let Some(found) = find_in(dir.to_path_buf()) {
+            return Some(found);
+        }
+    }
+
+    // Installed layout, part 2: a Debian package depends on the system
+    // `ffmpeg`, so it is on PATH and may live anywhere -- `/usr/bin`, `/bin`,
+    // or a user's own prefix. Checking PATH is the difference between an app
+    // that imports and exports on a real system and one that reports "the
+    // encoder is missing" while ffmpeg sits installed at /usr/bin/ffmpeg.
+    if let Some(path) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path) {
+            if let Some(found) = find_in(dir) {
+                return Some(found);
+            }
+        }
+    }
+    None
 }
 
 /// Progress as reported by FFmpeg's `-progress pipe:1` stream.
@@ -407,5 +425,25 @@ mod tests {
         if let Some(p) = sidecar_path("ffmpeg") {
             assert!(p.exists(), "resolved sidecar must exist on disk: {p:?}");
         }
+    }
+
+    #[test]
+    fn a_sidecar_on_path_resolves_even_when_it_is_not_beside_the_binary() {
+        // This is the Debian case: the package depends on the system ffmpeg,
+        // so it is on PATH at /usr/bin while the app may live anywhere. If the
+        // lookup only searched next to the executable, an installed copy would
+        // report "the encoder is missing" with ffmpeg installed and reachable.
+        let found = sidecar_path("ffmpeg").expect("ffmpeg must resolve somewhere");
+        assert!(found.exists(), "resolved path must exist: {found:?}");
+
+        // And it must be a real executable, not a directory that happens to
+        // share the name.
+        let meta = std::fs::metadata(&found).expect("metadata");
+        assert!(meta.is_file(), "sidecar must be a file: {found:?}");
+    }
+
+    #[test]
+    fn a_nonexistent_sidecar_still_returns_none() {
+        assert!(sidecar_path("definitely-not-a-real-sidecar-xyz").is_none());
     }
 }
