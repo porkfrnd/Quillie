@@ -123,6 +123,18 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/*
+ * The mount target. Without this the chain html/body (100%) -> #app -> shell
+ * (100%) breaks at the middle link: #app defaults to height:auto, so the
+ * shell's 100% resolves against content height, and .workspace{flex:1} inside
+ * an auto-height column collapses to min-height:0. The titlebar still renders
+ * (fixed 40px) while the main area is zero pixels tall -- a window that looks
+ * like the app loaded but shows nothing, with no error anywhere.
+ */
+#app {
+  height: 100%;
+}
+
 /* A visible focus ring everywhere (§17 accessibility). Never removed, only
    restyled -- keyboard users must always be able to see where they are. */
 :focus-visible {

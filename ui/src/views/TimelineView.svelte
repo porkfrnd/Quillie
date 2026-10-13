@@ -147,13 +147,6 @@ const { Application, Container, Graphics } = await import('pixi.js');
         // fill cost for no legibility gain on 8px-tall clip rectangles.
         resolution: Math.min(globalThis.devicePixelRatio ?? 1, 2),
         autoDensity: true,
-        // §14 targets a floor GPU. A timeline is a few dozen filled
-        // rectangles and some 1px lines, which WebGL is far more than this
-        // needs, and WebGL is the thing most likely to be missing or
-        // software-emulated on the machines that matter. Asking for the
-        // lowest-power backend first, with WebGL still available if the
-        // canvas backend cannot init, is the honest trade for a floor target.
-        preference: 'webgl',
       });
       if (destroyed) {
         app.destroy(true);
