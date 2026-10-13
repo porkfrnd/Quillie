@@ -9,6 +9,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
+import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 
 /** The error shape the host returns (rule 8). */
 export interface CommandError {
@@ -78,6 +79,35 @@ export const project = {
    */
   save: () => call<void>('save_project'),
 };
+
+/** A file the user picked, or `null` when they cancelled. */
+export type PickedFile = string | null;
+
+/**
+ * Ask the user for files to import.
+ *
+ * `null` means they cancelled, which is not an error: a cancel is the normal
+ * way to back out of a prompt and must not reach the user as a failure.
+ */
+export async function pickMediaFiles(): Promise<PickedFile> {
+  const picked = await openDialog({
+    multiple: true,
+    directory: false,
+    title: 'Import media',
+  });
+  // Tauri resolves to a path, an array of paths, or null.
+  if (Array.isArray(picked)) return picked.length > 0 ? picked.join('\n') : null;
+  return picked ?? null;
+}
+
+/** Ask the user where to export. */
+export async function pickExportPath(suggestedName: string): Promise<PickedFile> {
+  const picked = await saveDialog({
+    defaultPath: suggestedName,
+    title: 'Export video',
+  });
+  return picked ?? null;
+}
 
 /** One file that came in from disk. Mirrors the host's `ImportedSummary`. */
 export interface ImportedMediaSummary {

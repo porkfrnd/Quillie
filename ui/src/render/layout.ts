@@ -35,7 +35,7 @@ const TRACK_PADDING_PX = 4;
  * against the union makes a missing or mis-cased key a compile error instead
  * of an invisible rectangle.
  */
-const TRACK_FILL: Record<SourceClip['kind'], number> = {
+export const TRACK_FILL: Record<SourceClip["kind"], number> = {
   Video: 0x2f6feb,
   Overlay: 0x8b5cf6,
   Audio: 0x10b981,
@@ -60,6 +60,14 @@ export interface SourceClip {
   readonly kind: 'Video' | 'Overlay' | 'Audio' | 'Caption';
   readonly startTick: number;
   readonly endTick: number;
+  /**
+   * What the user calls this clip.
+   *
+   * Optional because a clip built from a bare id has nothing to show, and an
+   * empty label is better than a placeholder: the header already falls back to
+   * the track id, and a name-less clip is honest about being unsourced.
+   */
+  readonly name?: string;
   /** False when the clip has no media the host can resolve. */
   readonly resolved: boolean;
   readonly selected: boolean;

@@ -15,6 +15,16 @@
   import { DirtyFlags, Layer, RenderGate } from '$render/layers';
   import { layoutTimeline, hitTest, type SourceClip } from '$render/layout';
   import { zoomAt, xToTicks, snap, type Viewport } from '$render/viewport';
+  import { media, pickMediaFiles, QuillieError } from '$ipc/commands';
+  import { buildEmptyProject, buildMockProject, isMockMode, mockVariant } from '$state/mock';
+  import {
+    HEADER_WIDTH_PX,
+    RULER_HEIGHT_PX,
+    clampScrollY,
+    clipRectInLane,
+    timelineRects,
+  } from '$render/rects';
+  import { TRACK_FILL, UNRESOLVED_FILL } from '$render/layout';
   import { FPS_30 } from '$lib/time';
 
   let host: HTMLDivElement | null = $state(null);
@@ -25,42 +35,154 @@
   /**
    * What is on the timeline.
    *
-   * Seeded with a short clip so the timeline is not empty on first open --
-   * an editor whose centre pane is blank gives a user nothing to judge, and
-   * the canvas dimensions are not known until the first layout. In the running
-   * app these arrive from the project; here they exercise the real draw path.
+   * Starts empty on purpose. This used to be seeded with three clips so the
+   * view was never blank -- and that is exactly the defect worth removing:
+   * fake data in the shipped path, which shows a user an edit that does not
+   * exist and cannot be undone. The empty state below now says what to do
+   * instead, which is both honest and more useful than a decoy.
+   *
+   * These arrive from the open project once one exists.
    */
-  let clips = $state<readonly SourceClip[]>([
-    {
-      id: 'seed-a',
-      trackId: 'V1',
-      kind: 'Video',
-      startTick: 0,
-      endTick: 120_000 * 4,
-      resolved: true,
-      selected: false,
-    },
-    {
-      id: 'seed-b',
-      trackId: 'V1',
-      kind: 'Video',
-      startTick: 120_000 * 5,
-      endTick: 120_000 * 9,
-      resolved: true,
-      selected: false,
-    },
-    {
-      id: 'seed-c',
-      trackId: 'A1',
-      kind: 'Audio',
-      startTick: 0,
-      endTick: 120_000 * 9,
-      resolved: true,
-      selected: false,
-    },
-  ]);
+  let clips = $state<readonly SourceClip[]>([]);
 
-  let trackOrder = $state<readonly string[]>(['V1', 'A1']);
+  let trackOrder = $state<readonly string[]>([]);
+
+  const flags = new DirtyFlags();
+  let viewport = $state<Viewport>({
+    scrollTicks: 0,
+    widthPx: 800,
+    pxPerTick: 0.002,
+  });
+
+  /** Viewport height in CSS pixels; drives the lane rects. */
+  let viewportHeightPx = $state(0);
+  let scrollY = $state(0);
+
+  /**
+   * Every rectangle in the view, from the one layout function.
+   *
+   * Derived rather than computed inside the Pixi draw loop, so the DOM
+   * overlays and the canvas are reading the same numbers in the same frame.
+   */
+  const rects = $derived(
+    timelineRects({
+      viewportWidth: viewport.widthPx,
+      viewportHeight: viewportHeightPx,
+      trackIds: trackOrder,
+      playheadTick: playhead,
+      scrollTicks: viewport.scrollTicks,
+      pxPerTick: viewport.pxPerTick,
+      scrollY,
+    }),
+  );
+
+  const laneRects = $derived(rects.lanes);
+
+  /** Track display names. Falls back to the id so a lane is never blank. */
+  function trackName(id: string): string {
+    const fromClip = clips.find((c) => c.trackId === id);
+    return fromClip?.name ?? id;
+  }
+
+  /**
+   * Which icon the header row shows.
+   *
+   * Overlay and Caption are reported as themselves rather than flattened into
+   * Video: a caption track rendered with a video icon tells the user nothing,
+   * and these are two tracks in a real project.
+   */
+  function trackKind(id: string): 'Video' | 'Overlay' | 'Audio' | 'Caption' {
+    return clips.find((c) => c.trackId === id)?.kind ?? 'Video';
+  }
+
+  const KIND_ICON: Record<string, string> = {
+    Video: '▶',
+    Overlay: '◈',
+    Audio: '♪',
+    Caption: 'CC',
+  };
+
+  /**
+ * Whether a label is worth drawing, given how wide the clip is.
+ *
+ * Below roughly six characters there is no room for a name plus its ellipsis,
+ * and a name truncated to two letters identifies nothing -- so the clip is
+ * drawn unlabelled instead. An honest empty label beats a misleading one.
+ */
+function clipLabel(clip: SourceClip, widthPx: number): boolean {
+  return widthPx >= 56;
+}
+
+/**
+ * Shorten a name to fit, with an ellipsis.
+ *
+ * Character count rather than measured pixels, because the measurement is only
+ * available once the Text exists -- and creating it to find out how wide it is
+ * is the thing being avoided. 6px per character is the average advance for the
+ * UI font at 11px, which is close enough for a fit test and never re-rasterises.
+ */
+function truncate(name: string, widthPx: number): string {
+  const max = Math.max(3, Math.floor((widthPx - 12) / 6));
+  return name.length <= max ? name : `${name.slice(0, max - 1)}…`;
+}
+  /** `m:ss`, or `h:mm:ss` past an hour. Never float seconds. */
+  function timecode(ticks: number): string {
+    const total = Math.max(0, Math.floor(ticks / FPS_30.num * (FPS_30.den || 1)));
+    const s = Math.floor(total / 30) % 60;
+    const m = Math.floor(total / (30 * 60));
+    const h = Math.floor(m / 60);
+    const pad = (n: number): string => String(n).padStart(2, '0');
+    return h > 0 ? `${h}:${pad(m % 60)}:${pad(s)}` : `${m}:${pad(s)}`;
+  }
+
+  /** Set when the mock project should be zoomed to fit; see the effect below. */
+  let fitToProject = false;
+
+  /**
+   * Browser-mode harness data, and only that.
+   *
+   * `isMockMode` reads `?mock=1` from the URL. A packaged build serves its
+   * own scheme with no query string, so this is false there and the timeline
+   * shows whatever the open project holds -- which may legitimately be
+   * nothing.
+   */
+  if (isMockMode()) {
+    const p = mockVariant() === 'empty' ? buildEmptyProject() : buildMockProject();
+    clips = p.clips.map((c) => ({
+      id: c.id,
+      trackId: c.trackId,
+      kind: c.kind,
+      name: c.name,
+      startTick: c.startTick,
+      endTick: c.endTick,
+      resolved: true,
+      selected: false,
+    }));
+    trackOrder = p.tracks.map((t) => t.id);
+    fitToProject = true;
+  }
+
+  // Fit the project to the window.
+  //
+  // The default zoom is tuned for a long timeline, so a 9-second mock project
+  // overflowed and the third clip was correctly culled as off-screen --
+  // indistinguishable, in a screenshot, from a clip that failed to draw.
+  //
+  // An effect rather than a one-off at init because the width is not known
+  // until the element has been laid out; doing it inline read the placeholder
+  // 800px and fitted to the wrong size.
+  $effect(() => {
+    if (!fitToProject) return;
+    const usable = Math.max(200, viewport.widthPx - HEADER_WIDTH_PX - 24);
+    const end = clips.reduce((max, c) => Math.max(max, c.endTick), 0);
+    if (end <= 0 || usable <= 200) return;
+    const next = usable / end;
+    if (Math.abs(viewport.pxPerTick - next) > 1e-9) {
+      viewport = { ...viewport, pxPerTick: next };
+      flags.markAll();
+      gate?.request();
+    }
+  });
 
   /**
    * Why the canvas is empty, if it is.
@@ -75,12 +197,81 @@
   /** Set after the first successful draw, so the empty state can say so. */
   let framesDrawn = $state(0);
 
-  const flags = new DirtyFlags();
-  let viewport = $state<Viewport>({
-    scrollTicks: 0,
-    widthPx: 800,
-    pxPerTick: 0.002,
-  });
+  /**
+   * The clip rectangles the canvas just drew, in canvas-local coordinates.
+   *
+   * Published so the browser-mode harness can check them against the DOM
+   * ruler and header. A canvas has no inspectable geometry; without this the
+   * harness could only assert on DOM elements, and the actual defect -- clips
+   * drawn over the ruler -- lives entirely inside the canvas.
+   */
+  let drawnRects = $state<
+    readonly { x: number; y: number; width: number; height: number }[]
+  >([]);
+
+  /** Why the last import failed, in plain language. */
+  let importError = $state<string | null>(null);
+  let importing = $state(false);
+
+  /**
+   * Import media and put it on the timeline.
+   *
+   * Goes through the real host command, so what appears is what ffprobe
+   * actually read -- a file the user cannot decode produces a visible error
+   * rather than a clip that is not really there.
+   */
+  async function onImportClick(): Promise<void> {
+    if (importing) return;
+    importing = true;
+    importError = null;
+    try {
+      const picked = await pickMediaFiles();
+      // A cancelled dialog is a normal outcome, not a failure to report.
+      if (!picked) return;
+      const outcome = await media.import(picked.split('\n'));
+
+      if (outcome.imported.length === 0) {
+        importError =
+          outcome.failed?.join('; ') || 'Nothing could be imported from that file.';
+        return;
+      }
+
+      // Place each import at the end of its own track, in selection order.
+      const next: SourceClip[] = [...clips];
+      const nextTracks: string[] = [...trackOrder];
+      for (const m of outcome.imported) {
+        const lane = m.width !== null && m.height !== null ? 'V1' : 'A1';
+        if (!nextTracks.includes(lane)) nextTracks.push(lane);
+        const onLane = next.filter((c) => c.trackId === lane);
+        const laneEnd = onLane.reduce((max, c) => Math.max(max, c.endTick), 0);
+        next.push({
+          id: m.media_id,
+          trackId: lane,
+          kind: lane === 'V1' ? 'Video' : 'Audio',
+          startTick: laneEnd,
+          endTick: laneEnd + Math.round(m.duration_seconds * 120_000),
+          resolved: true,
+          selected: false,
+        });
+      }
+      clips = next;
+      trackOrder = nextTracks;
+      flags.markAll();
+      gate?.request();
+
+      // Partial success still has to say what failed, or the user believes
+      // they imported everything they picked.
+      if (outcome.failed?.length) {
+        importError = `Some files could not be imported: ${outcome.failed.join('; ')}`;
+      }
+    } catch (e) {
+      importError =
+        e instanceof QuillieError ? e.message : 'The import could not be completed.';
+    } finally {
+      importing = false;
+    }
+  }
+
 
   let gate: RenderGate | null = null;
   let destroyed = false;
@@ -134,7 +325,7 @@
 // script, and `default-src 'self'` still blocks every external origin. The
 // app loads no remote content, so the surface it opens is small -- and it is
 // confined to the app's own origin, which is already trusted to run.
-const { Application, Container, Graphics } = await import('pixi.js');
+const { Application, Container, Graphics, Text } = await import('pixi.js');
 
       const app = new Application();
       await app.init({
@@ -167,44 +358,137 @@ const { Application, Container, Graphics } = await import('pixi.js');
       const content = new Graphics();
       const interaction = new Graphics();
       const playheadLayer = new Graphics();
-      app.stage.addChild(content, interaction, playheadLayer);
-      void Container;
+      const labelLayer = new Container();
+      /**
+       * Cached clip labels, keyed by text and width.
+       *
+       * Pixi rasterises text into a texture when it is created or when its
+       * style changes. Rebuilding every label on every frame would re-rasterise
+       * on every pointermove -- the easiest possible way to make dragging a
+       * clip stutter on a floor machine.
+       *
+       * Deliberately a plain Map, not `SvelteMap`: it is written and read only
+       * inside the draw closure and is never read during template rendering,
+       * so Svelte reactivity would buy nothing and would put a proxy in the
+       * one path that runs on every pointer event.
+       */
+      // eslint-disable-next-line svelte/prefer-svelte-reactivity
+      const labelCache = new Map<
+        string,
+        InstanceType<typeof Text>
+      >();
+      app.stage.addChild(content, labelLayer, interaction, playheadLayer);
 
       const draw = (): void => {
         if (flags.consume(Layer.Content)) {
           content.clear();
+          // Labels are their own container so clearing content does not destroy
+          // the cached Text objects -- they are reused across frames.
+          for (const t of labelCache.values()) t.visible = false;
 
-          // The layout decides which rectangles exist; this decides how they
-          // look. Splitting them is what makes the geometry testable without
-          // a GPU, which matters because the floor machine may have neither.
-          const layout = layoutTimeline(clips, trackOrder, viewport, {
-            canvasHeightPx: app.screen.height,
+          // Rects come from render/rects.ts -- the same function the DOM
+          // header and lane rows read. The canvas previously used a separate
+          // layout that started clips at y=4 while the ruler occupied 0..28,
+          // which is how clips ended up drawn over the ruler's own labels.
+          // One layout, one set of numbers, nothing to disagree about.
+          const box = timelineRects({
+            viewportWidth: app.screen.width,
+            viewportHeight: app.screen.height,
+            trackIds: trackOrder,
+            playheadTick: playhead,
+            scrollTicks: viewport.scrollTicks,
+            pxPerTick: viewport.pxPerTick,
+            scrollY,
           });
-          framesDrawn = layout.drawnClips;
 
-          for (const row of layout.rows) {
-            for (const c of row.clips) {
-              // A sub-pixel rectangle cannot honestly represent a duration,
-              // so it is drawn as a hairline marker instead of a sliver.
-              if (c.tiny) {
-                content.rect(c.x, c.y, 1, c.height).fill({ color: c.color });
-                continue;
-              }
-              content.rect(c.x, c.y, c.width, c.height).fill({ color: c.color });
-              if (c.selected) {
-                content.rect(c.x, c.y, c.width, c.height).stroke({
+          let drawn = 0;
+          const drawnRectsTmp: { x: number; y: number; width: number; height: number }[] = [];
+          for (const lane of box.lanes) {
+            for (const clip of clips) {
+              if (clip.trackId !== lane.trackId) continue;
+              const r = clipRectInLane(
+                lane,
+                clip.startTick,
+                clip.endTick,
+                viewport.scrollTicks,
+                viewport.pxPerTick,
+              );
+              if (r.width <= 0 || r.right < lane.x || r.x > lane.x + lane.width) continue;
+              const color = clip.resolved ? TRACK_FILL[clip.kind] : UNRESOLVED_FILL;
+              drawn++;
+              drawnRectsTmp.push({ x: r.x, y: r.y, width: Math.max(1, r.width), height: r.height });
+
+              // A sub-pixel clip cannot honestly represent its duration, so it
+              // is drawn as a hairline rather than a sliver that implies a
+              // width it does not have.
+              content
+                .rect(r.x, r.y, Math.max(1, r.width), r.height)
+                .fill({ color });
+              if (clip.selected) {
+                content.rect(r.x, r.y, Math.max(1, r.width), r.height).stroke({
                   width: 2,
                   color: 0xffffff,
                 });
               }
+              // A clip's label, drawn only when there is room to read it.
+              //
+              // One Text object per distinct label, kept in a Map and reused.
+              // Building a Text every frame would re-rasterise the glyphs on
+              // every redraw -- including every pointermove -- which is the
+              // single easiest way to make a timeline stutter.
+              const label = clipLabel(clip, r.width);
+              if (label) {
+                const key = `${clip.name ?? ''}|${Math.round(r.width)}`;
+                let text = labelCache.get(key);
+                if (!text) {
+                  text = new Text({
+                    text: truncate(clip.name ?? 'Clip', r.width),
+                    style: {
+                      fontSize: 11,
+                      fill: 0xffffff,
+                      fontFamily: 'system-ui, sans-serif',
+                    },
+                  });
+                  labelCache.set(key, text);
+                  labelLayer.addChild(text);
+                }
+                text.visible = true;
+                text.x = r.x + 6;
+                text.y = r.y + (r.height - text.height) / 2;
+              }
             }
           }
+          framesDrawn = drawn;
+          // Published for the browser-mode harness and the debug overlay.
+          //
+          // A canvas has no DOM rects, so "do the clips cover the ruler?" was
+          // previously unanswerable from outside the app -- which is exactly
+          // how clips sat over the ruler while every DOM check passed. These
+          // are canvas-local coordinates; the harness adds the canvas origin.
+          drawnRects = drawnRectsTmp;
         }
         if (flags.consume(Layer.Interaction)) interaction.clear();
         if (flags.consume(Layer.Playhead)) {
           playheadLayer.clear();
-          const x = (playhead - viewport.scrollTicks) * viewport.pxPerTick;
-          playheadLayer.moveTo(x, 0).lineTo(x, app.screen.height).stroke({ width: 1, color: 0x2f6feb });
+          // Also from rects.ts, and from the same `box` the clips used, so the
+          // playhead cannot drift a few pixels from the clips it marks.
+          const box = timelineRects({
+            viewportWidth: app.screen.width,
+            viewportHeight: app.screen.height,
+            trackIds: trackOrder,
+            playheadTick: playhead,
+            scrollTicks: viewport.scrollTicks,
+            pxPerTick: viewport.pxPerTick,
+            scrollY,
+          });
+          // Drawn over the content area only: a line from y=0 would cross the
+          // ruler and the header column, which belong to neither.
+          if (box.playheadX !== null) {
+            playheadLayer
+              .moveTo(box.playheadX, box.content.y)
+              .lineTo(box.playheadX, box.content.y + box.content.height)
+              .stroke({ width: 1, color: 0x2f6feb });
+          }
         }
       };
 
@@ -219,9 +503,15 @@ const { Application, Container, Graphics } = await import('pixi.js');
       let lastWidth = app.screen.width;
       let lastHeight = app.screen.height;
       const onResize = (): void => {
-        if (app.screen.width === lastWidth && app.screen.height === lastHeight) return;
+        // The DOM lane rects read the element's own height, not the Pixi
+        // screen height, so both are refreshed here. Reading only one is how
+        // the header and the canvas end up disagreeing about where the
+        // content starts.
+        const h = el.clientHeight;
+        if (app.screen.width === lastWidth && app.screen.height === lastHeight && h === viewportHeightPx) return;
         lastWidth = app.screen.width;
         lastHeight = app.screen.height;
+        viewportHeightPx = h;
         viewport = { ...viewport, widthPx: app.screen.width };
         flags.markAll();
         gate?.request();
@@ -231,8 +521,15 @@ const { Application, Container, Graphics } = await import('pixi.js');
         e.preventDefault();
         if (e.ctrlKey) {
           viewport = zoomAt(viewport, e.deltaY < 0 ? 1.1 : 1 / 1.1, e.offsetX);
-        } else {
+        } else if (e.shiftKey || e.deltaX !== 0) {
           viewport = { ...viewport, scrollTicks: viewport.scrollTicks + e.deltaX / viewport.pxPerTick };
+        } else {
+          // Plain vertical wheel scrolls the lanes.
+          //
+          // Clamped rather than allowed to go negative: an unclamped scroll
+          // pushes the first lane up under the ruler, which is the overlap this
+          // layout exists to prevent.
+          scrollY = clampScrollY(scrollY + e.deltaY, rects.totalHeight, viewportHeightPx);
         }
         flags.markAll();
         gate?.request();
@@ -265,6 +562,12 @@ const { Application, Container, Graphics } = await import('pixi.js');
       app.canvas.addEventListener('pointerdown', onPointerDown);
       const resizeObserver = new ResizeObserver(onResize);
       resizeObserver.observe(el);
+      // Seeded, because a ResizeObserver only fires on a *change*: an element
+      // that mounts at its final size never triggers one, so without this the
+      // viewport height stays 0 and every lane rect is empty. That is the
+      // silent blank timeline, again, for the same reason.
+      viewportHeightPx = el.clientHeight;
+      onResize();
 
       teardown = () => {
         gate?.stop();
@@ -282,15 +585,71 @@ const { Application, Container, Graphics } = await import('pixi.js');
   aria-label="Timeline"
   tabindex="0"
   bind:this={host}
+  data-drawn={JSON.stringify(drawnRects)}
 >
-  <div class="ruler" aria-hidden="true">
-    <span class="timecode">{Math.floor(playhead / 120000)}s</span>
+  <!--
+    The ruler and the track headers are DOM, not canvas: they carry the text a
+    screen reader needs and they must stay selectable. Their rectangles come
+    from render/rects.ts, the same place the clip lanes come from, so the two
+    cannot disagree about where the ruler ends -- which is exactly how clips
+    ended up drawn over the ruler's own labels.
+  -->
+  <div
+    class="ruler"
+    data-probe="ruler"
+    style:height="{RULER_HEIGHT_PX}px"
+  >
+    <span class="timecode">{timecode(playhead)}</span>
+  </div>
+
+  <div
+    class="header"
+    data-probe="header"
+    style:top="{RULER_HEIGHT_PX}px"
+    style:width="{HEADER_WIDTH_PX}px"
+  >
+    {#each laneRects as lane (lane.trackId)}
+      <div
+        class="header-row"
+        data-probe="lane"
+        style:top="{lane.y - RULER_HEIGHT_PX}px"
+        style:height="{lane.height}px"
+      >
+        <span class="track-kind" data-kind={trackKind(lane.trackId)} aria-hidden="true">
+          {KIND_ICON[trackKind(lane.trackId)] ?? '▶'}
+        </span>
+        <span class="track-name">{trackName(lane.trackId)}</span>
+      </div>
+    {/each}
   </div>
 
   {#if canvasError}
     <p class="diagnostic" role="alert">Timeline could not start: {canvasError}</p>
   {:else if framesDrawn === 0 && clips.length > 0}
     <p class="diagnostic">Nothing in view — scroll or zoom to see the clips.</p>
+  {:else if clips.length === 0}
+    <!--
+      The empty state. A blank void reads as "broken"; this reads as "nothing
+      here yet, here is the one thing to do". The button dispatches the real
+      import path rather than a placeholder, per the no-fake-controls rule.
+    -->
+    <div
+      class="empty"
+      data-probe="empty"
+      style:top="{RULER_HEIGHT_PX}px"
+      style:left="{HEADER_WIDTH_PX}px"
+      style:right="0"
+      style:bottom="0"
+    >
+      <p class="empty-title">No clips yet</p>
+      <p class="empty-hint">Import a video or audio file to start editing.</p>
+      <button type="button" class="import-btn" onclick={onImportClick}>
+        Import media…
+      </button>
+      {#if importError}
+        <p class="empty-error" role="alert">{importError}</p>
+      {/if}
+    </div>
   {/if}
 </div>
 
@@ -309,7 +668,10 @@ const { Application, Container, Graphics } = await import('pixi.js');
   .ruler {
     position: absolute;
     inset: 0 0 auto 0;
-    height: 24px;
+    /* Height comes from the inline style bound to RULER_HEIGHT_PX, so this
+       rule must not restate it. It used to say `height: 24px` while the layout
+       said 28, and the two disagreed by exactly the amount clips overlapped
+       the ruler. One number, from one place. */
     display: flex;
     align-items: center;
     padding: 0 var(--space-2);
@@ -318,6 +680,49 @@ const { Application, Container, Graphics } = await import('pixi.js');
     /* The Pixi canvas sits under this; the ruler is a real DOM element so it
        stays selectable by assistive tech. */
     pointer-events: none;
+  }
+
+  /*
+   * The track header column and its rows.
+   *
+   * Both are positioned absolutely and both take their coordinates from
+   * rects.ts via inline styles. Positioning them by CSS instead is what let
+   * the header drift out of step with the lanes the canvas draws.
+   */
+  .header {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    width: 148px;
+    overflow: hidden;
+    background: var(--bg-raised);
+    border-right: 1px solid var(--border);
+  }
+
+  .header-row {
+    position: absolute;
+    left: 0;
+    right: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 0 var(--space-2);
+    font-size: var(--text-sm);
+    color: var(--fg-muted);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .track-kind {
+    flex: none;
+    width: 1.2em;
+    text-align: center;
+    color: var(--fg-subtle);
+  }
+
+  .track-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .timecode {
@@ -338,5 +743,61 @@ const { Application, Container, Graphics } = await import('pixi.js');
     border-radius: var(--radius-sm);
     /* The canvas sits underneath; the message has to be readable over it. */
     pointer-events: none;
+  }
+
+  /*
+   * The empty state sits below the ruler, in the content area, rather than
+   * centred over the whole panel -- centring it would cover the ruler and
+   * reintroduce the overlap this layout was rebuilt to remove.
+   */
+  .empty {
+    position: absolute;
+    /* Bound inline to RULER_HEIGHT_PX / HEADER_WIDTH_PX for the same reason
+       the ruler's height is: a literal here would drift from the layout. */
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    text-align: center;
+  }
+
+  .empty-title {
+    margin: 0;
+    font-size: var(--text-md);
+    color: var(--fg);
+  }
+
+  .empty-hint {
+    margin: 0;
+    color: var(--fg-muted);
+  }
+
+  .empty-error {
+    margin: 0;
+    max-width: 60ch;
+    color: var(--danger);
+  }
+
+  .import-btn {
+    appearance: none;
+    margin-top: var(--space-2);
+    padding: var(--space-2) var(--space-4);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-sm);
+    background: var(--accent);
+    color: var(--accent-fg);
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .import-btn:hover {
+    background: var(--accent-subtle);
+    color: var(--accent);
+  }
+
+  .import-btn:disabled {
+    opacity: 0.6;
+    cursor: default;
   }
 </style>

@@ -39,6 +39,10 @@ tempfile = "3"
 # runtime in dev too.
 tauri = { version = "2", features = ["protocol-asset"], optional = true }
 tauri-plugin-shell = { version = "2", optional = true }
+# File pickers. Without this the UI cannot ask the user for a path at all, and
+# the working import/export commands are unreachable -- the app could export but
+# nobody tells it where to.
+tauri-plugin-dialog = { version = "2", optional = true }
 
 [dev-dependencies]
 quillie-core = { path = "../quillie-core" }
@@ -46,7 +50,7 @@ quillie-core = { path = "../quillie-core" }
 [features]
 default = []
 # The packaged application. Enabled by the Tauri build.
-tauri-host = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-shell", "tauri/custom-protocol"]
+tauri-host = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-shell", "dep:tauri-plugin-dialog", "tauri/custom-protocol"]
 # Tests that run the real ffprobe/ffmpeg sidecars against real generated
 # media. Off by default so `cargo test` works with no sidecar built.
 media = []
