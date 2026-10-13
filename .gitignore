@@ -51,6 +51,9 @@ Thumbs.db
 # locks are local tooling artefacts, not project source.
 .swarm/
 
+# The coding agent's own session state, same reasoning as .swarm/ above.
+.opencode/
+
 # Local scratch
 *.log
 .env
@@ -75,5 +78,22 @@ info:
 info:-
 docs/reports/shot-*.png
 docs/reports/timeline-clips.png
+
+# Ad-hoc debugging screenshots from bisecting the timeline defects. Named
+# rather than pattern-matched on purpose: these are throwaway captures, while
+# the shots the reports actually cite (docs/screens/a-*.png,
+# docs/reports/timeline-rendering.png, dev-mode.png) are evidence and are
+# tracked. A pattern here would eventually swallow a cited screenshot.
+docs/reports/ab1.png
+docs/reports/ab2.png
+docs/reports/dbg1.png
+docs/reports/f3.png
+docs/reports/fix1.png
+docs/reports/fix2.png
+docs/reports/inst3.png
+docs/reports/installed-layout.png
+docs/reports/installed2.png
+docs/reports/v2.png
+
 ui/docs/screens/
 docs/screens/*.xwd
