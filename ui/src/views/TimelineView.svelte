@@ -25,7 +25,8 @@
     timelineRects,
   } from '$render/rects';
   import { TRACK_FILL, UNRESOLVED_FILL } from '$render/layout';
-  import { FPS_30 } from '$lib/time';
+  import { rulerTicks } from '$render/ruler';
+  import { FPS_30, formatTimecode } from '$lib/time';
 
   let host: HTMLDivElement | null = $state(null);
 
@@ -125,14 +126,17 @@ function truncate(name: string, widthPx: number): string {
   const max = Math.max(3, Math.floor((widthPx - 12) / 6));
   return name.length <= max ? name : `${name.slice(0, max - 1)}…`;
 }
-  /** `m:ss`, or `h:mm:ss` past an hour. Never float seconds. */
+  /**
+   * The ruler's timecode.
+   *
+   * Delegates to `formatTimecode` in lib/time rather than reimplementing it.
+   * The hand-rolled version here divided ticks by the frame *rate* instead of
+   * by ticks-per-second and showed `0` where it should show `0:00` -- and the
+   * mirror is already covered by unit tests, so reusing it is both shorter and
+   * the version that is actually verified.
+   */
   function timecode(ticks: number): string {
-    const total = Math.max(0, Math.floor(ticks / FPS_30.num * (FPS_30.den || 1)));
-    const s = Math.floor(total / 30) % 60;
-    const m = Math.floor(total / (30 * 60));
-    const h = Math.floor(m / 60);
-    const pad = (n: number): string => String(n).padStart(2, '0');
-    return h > 0 ? `${h}:${pad(m % 60)}:${pad(s)}` : `${m}:${pad(s)}`;
+    return formatTimecode(ticks, FPS_30);
   }
 
   /** Set when the mock project should be zoomed to fit; see the effect below. */
@@ -461,17 +465,23 @@ const { Application, Container, Graphics, Text } = await import('pixi.js');
           framesDrawn = drawn;
           // Published for the browser-mode harness and the debug overlay.
           //
-          // A canvas has no DOM rects, so "do the clips cover the ruler?" was
-          // previously unanswerable from outside the app -- which is exactly
-          // how clips sat over the ruler while every DOM check passed. These
-          // are canvas-local coordinates; the harness adds the canvas origin.
+          // A canvas has no DOM rects, so "do the clips cover the ruler?" is
+          // otherwise unanswerable from outside the app -- which is how clips
+          // sat over the ruler while every DOM check passed. Canvas-local
+          // coordinates; the harness adds the canvas origin.
+          //
+          // Assigning a fresh array each frame is deliberate: Svelte compares
+          // by reference, and mutating one in place would not notify the
+          // data attribute.
           drawnRects = drawnRectsTmp;
         }
-        if (flags.consume(Layer.Interaction)) interaction.clear();
+
+        // The ruler, drawn with the adaptive tick ladder from render/ruler.ts.
+        // That module was written and unit-tested but never wired in, which
+        // is why the user's screenshots show a bare strip with only a timecode
+        // and no tick marks at all.
         if (flags.consume(Layer.Playhead)) {
           playheadLayer.clear();
-          // Also from rects.ts, and from the same `box` the clips used, so the
-          // playhead cannot drift a few pixels from the clips it marks.
           const box = timelineRects({
             viewportWidth: app.screen.width,
             viewportHeight: app.screen.height,
@@ -481,13 +491,33 @@ const { Application, Container, Graphics, Text } = await import('pixi.js');
             pxPerTick: viewport.pxPerTick,
             scrollY,
           });
-          // Drawn over the content area only: a line from y=0 would cross the
-          // ruler and the header column, which belong to neither.
+
+          // Ticks are confined to the ruler band and start after the header
+          // column, so they cannot be drawn over a track name.
+          const rulerLeft = box.ruler.x + HEADER_WIDTH_PX;
+          const rulerRight = box.ruler.x + box.ruler.width;
+          for (const tick of rulerTicks({
+            pxPerTick: viewport.pxPerTick,
+            scrollTicks: viewport.scrollTicks,
+            widthPx: box.ruler.width,
+            frameRate: FPS_30,
+          })) {
+            const x = box.content.x + (tick.ticks - viewport.scrollTicks) * viewport.pxPerTick;
+            if (x < rulerLeft - 1 || x > rulerRight) continue;
+            const h = tick.major ? box.ruler.height * 0.55 : box.ruler.height * 0.28;
+            playheadLayer
+              .moveTo(x, box.ruler.y + box.ruler.height - h)
+              .lineTo(x, box.ruler.y + box.ruler.height)
+              .stroke({ width: 1, color: tick.major ? 0x6b6b78 : 0x3d3d47 });
+          }
+
+          // Playhead, across the content area only: a line from y=0 would cross
+          // the ruler and the header column, which belong to neither.
           if (box.playheadX !== null) {
             playheadLayer
               .moveTo(box.playheadX, box.content.y)
               .lineTo(box.playheadX, box.content.y + box.content.height)
-              .stroke({ width: 1, color: 0x2f6feb });
+              .stroke({ width: 1, color: 0x6f9dff });
           }
         }
       };

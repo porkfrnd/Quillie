@@ -75,3 +75,5 @@ info:
 info:-
 docs/reports/shot-*.png
 docs/reports/timeline-clips.png
+ui/docs/screens/
+docs/screens/*.xwd
