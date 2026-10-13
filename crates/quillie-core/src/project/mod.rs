@@ -16,5 +16,5 @@ mod undo;
 
 pub use edit::{EditError, EditOp, Inverse, Patch, TimeRange, TrimEdge};
 pub use model::*;
-pub use schema::{migrate, MigrationError};
+pub use schema::{migrate, MigrationError, OLDEST_SUPPORTED_VERSION};
 pub use undo::UndoStack;

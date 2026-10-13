@@ -14,7 +14,7 @@
 //! which is a pure function — it needs no stored state on the project, so
 //! there is no way for a patch to drift out of sync with the model.
 
-use super::model::{Clip, ClipId, Project, SequenceId, Track, TrackId};
+use super::model::{Clip, ClipId, Project, SequenceId, Track, TrackFlag, TrackId};
 use crate::time::Ticks;
 use serde::{Deserialize, Serialize};
 
@@ -73,6 +73,25 @@ pub enum EditOp {
     RippleDelete { sequence: SequenceId, track: TrackId, range: TimeRange },
     /// Move a clip and shift everything after it, closing or opening a gap.
     RippleMove { sequence: SequenceId, track: TrackId, clip: ClipId, to: Ticks },
+    /// Set one of a track's own switches: mute, solo, lock or hide.
+    ///
+    /// One variant rather than four because each would otherwise need its own
+    /// inverse variant and its own patch arm for what is the same three-line
+    /// write. It also keeps the UI from sending a *toggle*: a toggle means
+    /// whatever the value happens to be, which is a question the UI can only
+    /// answer from state it may already be stale about. The caller always
+    /// sends the value it wants.
+    ///
+    /// This op deliberately bypasses the lock gate — including for
+    /// [`TrackFlag::Locked`]. Lock protects a track's *clips*; it is not the
+    /// user locking themselves out of their own timeline. Gating it here would
+    /// make a locked track impossible to unlock, with no way back.
+    SetTrackFlag {
+        sequence: SequenceId,
+        track: TrackId,
+        flag: TrackFlag,
+        value: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -150,6 +169,17 @@ pub enum Inverse {
     UndoRippleDelete { sequence: SequenceId, track: TrackId, restored: Vec<Clip> },
     /// Undoes a ripple move: restore every shifted clip to where it was.
     UndoRippleMove { sequence: SequenceId, track: TrackId, from: Ticks, moved: Vec<(ClipId, Ticks)> },
+    /// Undoes a flag change: restore the switch to the value it held.
+    ///
+    /// Restored by writing the field directly rather than by re-applying
+    /// [`EditOp::SetTrackFlag`], so there is only one path that can change a
+    /// flag and it is the one that documents the lock exemption.
+    UndoTrackFlag {
+        sequence: SequenceId,
+        track: TrackId,
+        flag: TrackFlag,
+        from: bool,
+    },
 }
 
 impl Inverse {
@@ -202,6 +232,11 @@ impl Inverse {
                 }
                 let idx = index.min(tr.clips.len());
                 tr.clips.insert(idx, *original);
+                Ok(())
+            }
+            Inverse::UndoTrackFlag { sequence, track, flag, from } => {
+                let tr = project.track_unchecked_mut(sequence, track)?;
+                flag.set(tr, from);
                 Ok(())
             }
             Inverse::UndoRippleDelete { sequence, track, restored } => {
@@ -342,6 +377,10 @@ impl Patch {
                 sequence: *sequence,
                 track: *track,
             },
+            EditOp::SetTrackFlag { sequence, track, .. } => Patch::TrackChanged {
+                sequence: *sequence,
+                track: *track,
+            },
         }
     }
 }
@@ -459,18 +498,26 @@ impl Project {
                 })
             }
 
-            EditOp::RippleDelete { sequence, track, range } => {
-                let seq = self
-                    .sequences
-                    .iter_mut()
-                    .find(|s| s.id == sequence)
-                    .ok_or(EditError::UnknownSequence(sequence))?;
-                let tr = seq
-                    .track_mut(track)
-                    .ok_or(EditError::UnknownTrack(track))?;
-                if tr.locked {
-                    return Err(EditError::TrackLocked);
+            EditOp::SetTrackFlag { sequence, track, flag, value } => {
+                // `track_unchecked_mut`, not `track_mut_checked`: the lock is
+                // there to stop clips being edited, and routing a flag change
+                // through the gate would mean locking a track also locks the
+                // user's ability to unlock it. See the variant's doc comment.
+                let tr = self.track_unchecked_mut(sequence, track)?;
+                let from = flag.get(tr);
+                if from == value {
+                    // Nothing changed, so there is nothing to undo. An undo
+                    // step that does nothing makes the user press undo, see
+                    // no change, and press it again, which reads as a dropped
+                    // keystroke. Matches the zero-shift case in RippleMove.
+                    return Ok(Inverse::NoOp);
                 }
+                flag.set(tr, value);
+                Ok(Inverse::UndoTrackFlag { sequence, track, flag, from })
+            }
+
+            EditOp::RippleDelete { sequence, track, range } => {
+                let tr = self.track_mut_checked(sequence, track)?;
                 // Undo stores the whole prior clip list. This is O(n) memory
                 // per ripple delete, which is the honest cost of making undo
                 // exact rather than approximate.
@@ -523,7 +570,13 @@ impl Project {
         }
     }
 
-    fn track_mut_checked(
+    /// Find a track, without asking whether it is locked.
+    ///
+    /// The one place that knows how a track is located. Split out from the
+    /// lock check below so that "how do I find a track" and "is this track
+    /// locked" cannot drift apart, and so the flag ops that must ignore the
+    /// lock can say so by calling this instead.
+    fn track_unchecked_mut(
         &mut self,
         sequence: SequenceId,
         track: TrackId,
@@ -533,9 +586,20 @@ impl Project {
             .iter_mut()
             .find(|s| s.id == sequence)
             .ok_or(EditError::UnknownSequence(sequence))?;
-        let tr = seq
-            .track_mut(track)
-            .ok_or(EditError::UnknownTrack(track))?;
+        seq.track_mut(track).ok_or(EditError::UnknownTrack(track))
+    }
+
+    /// Find a track and refuse if it is locked.
+    ///
+    /// This is the gate every clip-editing op goes through. It is
+    /// deliberately *not* the path [`EditOp::SetTrackFlag`] takes: the switch
+    /// that unlocks a track cannot itself require the track to be unlocked.
+    fn track_mut_checked(
+        &mut self,
+        sequence: SequenceId,
+        track: TrackId,
+    ) -> Result<&mut Track, EditError> {
+        let tr = self.track_unchecked_mut(sequence, track)?;
         if tr.locked {
             return Err(EditError::TrackLocked);
         }
@@ -546,5 +610,207 @@ impl Project {
 impl Clip {
     fn overlaps_range(&self, r: TimeRange) -> bool {
         self.timeline_start < r.end && r.start < self.end()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::undo::UndoStack;
+    use crate::project::{TrackKind, SCHEMA_VERSION};
+    use crate::time::FrameRate;
+
+    /// A project with one video track carrying one clip, plus the ids needed to
+    /// address it.
+    fn project() -> (Project, SequenceId, TrackId) {
+        let mut p = Project::new("test", FrameRate::new(30, 1), (1920, 1080));
+        let seq = p.primary_sequence_mut();
+        let track = Track::new(TrackKind::Video, "V1");
+        let (seq_id, track_id) = (seq.id, track.id);
+        seq.tracks.push(track);
+        let op = EditOp::InsertClip {
+            sequence: seq_id,
+            track: track_id,
+            index: 0,
+            clip: Box::new(Clip::new(None, Ticks::ZERO, Ticks::ZERO, Ticks(120_000))),
+        };
+        p.apply(op).unwrap();
+        (p, seq_id, track_id)
+    }
+
+    fn set_flag(sequence: SequenceId, track: TrackId, flag: TrackFlag, value: bool) -> EditOp {
+        EditOp::SetTrackFlag { sequence, track, flag, value }
+    }
+
+    /// The addressed track.
+    ///
+    /// `Project` has no `track` of its own — it lives on `Sequence` — so every
+    /// assertion that wants to look at a track goes through this rather than
+    /// unwrapping the sequence inline a dozen times.
+    fn track_of(p: &Project, seq: SequenceId, track: TrackId) -> &Track {
+        p.sequences
+            .iter()
+            .find(|s| s.id == seq)
+            .expect("sequence exists")
+            .track(track)
+            .expect("track exists")
+    }
+
+    fn track_id_of(p: &Project, seq: SequenceId) -> TrackId {
+        p.sequences
+            .iter()
+            .find(|s| s.id == seq)
+            .expect("sequence exists")
+            .tracks[0]
+            .id
+    }
+
+    #[test]
+    fn a_flag_change_is_undone_back_to_a_byte_identical_project() {
+        let (mut p, seq, track) = project();
+        let before = serde_json::to_string(&p).unwrap();
+
+        let inverse = p.apply(set_flag(seq, track, TrackFlag::Hidden, true)).unwrap();
+        assert!(track_of(&p, seq, track).hidden);
+        assert_ne!(before, serde_json::to_string(&p).unwrap(), "the op must change something");
+
+        inverse.undo(&mut p).unwrap();
+        assert_eq!(
+            before,
+            serde_json::to_string(&p).unwrap(),
+            "undo must restore the project exactly, not approximately"
+        );
+    }
+
+    #[test]
+    fn setting_a_flag_to_the_value_it_already_holds_records_nothing_to_undo() {
+        let (mut p, seq, track) = project();
+        let inverse = p.apply(set_flag(seq, track, TrackFlag::Muted, false)).unwrap();
+        assert!(matches!(inverse, Inverse::NoOp));
+
+        // And the undo stack must not keep it, or the user presses undo, sees
+        // no change, and presses it again.
+        let mut stack = UndoStack::new();
+        assert!(!stack.push(set_flag(seq, track, TrackFlag::Muted, false), inverse));
+        assert!(!stack.can_undo());
+    }
+
+    /// The one this whole refactor exists to make impossible.
+    ///
+    /// If flag ops went through the lock gate, a user who locked a track would
+    /// have no way to unlock it: every switch would be refused, including the
+    /// one that unlocks.
+    #[test]
+    fn a_locked_track_can_still_have_every_switch_changed_including_being_unlocked() {
+        let (mut p, seq, track) = project();
+
+        p.apply(set_flag(seq, track, TrackFlag::Locked, true)).unwrap();
+        assert!(track_of(&p, seq, track).locked);
+
+        // Every switch, including the others that are not the lock, while the
+        // track is locked.
+        for flag in [TrackFlag::Muted, TrackFlag::Solo, TrackFlag::Hidden] {
+            p.apply(set_flag(seq, track, flag, true)).unwrap();
+            let t = track_of(&p, seq, track);
+            assert!(flag.get(t), "{flag:?} must be settable on a locked track");
+            assert!(t.locked, "setting another flag must not unlock the track");
+        }
+
+        // And the way out.
+        p.apply(set_flag(seq, track, TrackFlag::Locked, false)).unwrap();
+        assert!(!track_of(&p, seq, track).locked, "a locked track must be unlockable");
+    }
+
+    #[test]
+    fn clip_edits_on_a_locked_track_are_still_refused() {
+        let (mut p, seq, track) = project();
+        let clip_id = track_of(&p, seq, track).clips[0].id;
+        p.apply(set_flag(seq, track, TrackFlag::Locked, true)).unwrap();
+
+        for op in [
+            EditOp::DeleteClip { sequence: seq, track, clip: clip_id },
+            EditOp::MoveClip { sequence: seq, track, clip: clip_id, to: Ticks(240_000) },
+            EditOp::TrimClip {
+                sequence: seq,
+                track,
+                clip: clip_id,
+                edge: TrimEdge::Out,
+                to: Ticks(240_000),
+            },
+            EditOp::SplitClip { sequence: seq, track, clip: clip_id, at: Ticks(60_000) },
+            EditOp::RippleDelete { sequence: seq, track, range: TimeRange::new(Ticks::ZERO, Ticks(60_000)) },
+            EditOp::RippleMove { sequence: seq, track, clip: clip_id, to: Ticks(240_000) },
+        ] {
+            assert_eq!(
+                p.apply(op.clone()).unwrap_err(),
+                EditError::TrackLocked,
+                "{op:?} must be refused on a locked track"
+            );
+        }
+    }
+
+    #[test]
+    fn undoing_a_lock_and_replaying_it_restores_both_the_lock_and_the_clip_edit() {
+        let (mut p, seq, track) = project();
+        let clip_id = track_of(&p, seq, track).clips[0].id;
+        let mut stack = UndoStack::new();
+
+        let lock = set_flag(seq, track, TrackFlag::Locked, true);
+        let inverse = p.apply(lock.clone()).unwrap();
+        stack.push(lock, inverse);
+
+        let before = serde_json::to_string(&p).unwrap();
+        let inverse = stack.undo().unwrap();
+        inverse.undo(&mut p).unwrap();
+        assert!(!track_of(&p, seq, track).locked);
+
+        let redo = stack.redo().unwrap();
+        p.apply(redo).unwrap();
+        assert_eq!(before, serde_json::to_string(&p).unwrap(), "redo must be exact");
+        assert!(matches!(
+            p.apply(EditOp::DeleteClip { sequence: seq, track, clip: clip_id }),
+            Err(EditError::TrackLocked)
+        ));
+    }
+
+    #[test]
+    fn a_flag_op_against_a_track_that_does_not_exist_is_an_error_not_a_panic() {
+        let (mut p, seq, _) = project();
+        let err = p
+            .apply(set_flag(seq, TrackId::new_v4(), TrackFlag::Muted, true))
+            .unwrap_err();
+        assert!(matches!(err, EditError::UnknownTrack(_)));
+
+        let err = p
+            .apply(set_flag(SequenceId::new_v4(), track_id_of(&p, seq), TrackFlag::Muted, true))
+            .unwrap_err();
+        assert!(matches!(err, EditError::UnknownSequence(_)));
+    }
+
+    #[test]
+    fn a_flag_op_describes_itself_as_a_track_change() {
+        let (p, seq, track) = project();
+        let op = set_flag(seq, track, TrackFlag::Solo, true);
+        let inverse = Inverse::UndoTrackFlag { sequence: seq, track, flag: TrackFlag::Solo, from: false };
+        assert_eq!(
+            Patch::from(&op, &inverse),
+            Patch::TrackChanged { sequence: seq, track }
+        );
+        // The patch is derived from the op alone, so it must not depend on the
+        // inverse being the real one.
+        assert_eq!(
+            Patch::from(&op, &Inverse::NoOp),
+            Patch::TrackChanged { sequence: seq, track }
+        );
+        let _ = p;
+    }
+
+    #[test]
+    fn adding_solo_did_not_move_the_schema_version() {
+        // `solo` is additive and defaults, so a v1 file still loads and the
+        // version did not need to change. If this fails, the compatibility
+        // obligation in docs/project-format.md was not honoured.
+        assert_eq!(SCHEMA_VERSION, 1);
+        let (_, _, _) = project();
     }
 }

@@ -139,6 +139,16 @@ impl Sequence {
     pub fn track_mut(&mut self, id: TrackId) -> Option<&mut Track> {
         self.tracks.iter_mut().find(|t| t.id == id)
     }
+
+    /// Is any track in this sequence soloed?
+    ///
+    /// Per sequence rather than per project: solo is a mixing decision made
+    /// about one arrangement, and a project with several sequences of the same
+    /// footage should be able to solo differently in each. Making this global
+    /// would mean the answer depends on tracks the user is not looking at.
+    pub fn any_solo(&self) -> bool {
+        self.tracks.iter().any(|t| t.solo)
+    }
 }
 
 /// How a track behaves. Determines which clips may live on it and whether it
@@ -152,6 +162,72 @@ pub enum TrackKind {
     Caption,
 }
 
+impl TrackKind {
+    /// The switches that mean anything on a track of this kind.
+    ///
+    /// A video track has no audio to mute, so "mute" on it would be a control
+    /// that cannot do anything — the decoy-control failure this project treats
+    /// as a defect. Its mute is "hide" instead, which is what every mainstream
+    /// editor calls it. Solo is an audio concept too: no mainstream NLE offers
+    /// it on a video track, because soloing one video track does not select a
+    /// subset of anything — it just hides the rest.
+    ///
+    /// Driven from the kind rather than hard-coded per header row in the UI, so
+    /// the header cannot disagree with the model about which switches exist.
+    pub fn controls(self) -> &'static [TrackFlag] {
+        const AUDIO_CONTROLS: &[TrackFlag] =
+            &[TrackFlag::Muted, TrackFlag::Solo, TrackFlag::Locked];
+        const VISUAL_CONTROLS: &[TrackFlag] = &[TrackFlag::Hidden, TrackFlag::Locked];
+        match self {
+            TrackKind::Audio => AUDIO_CONTROLS,
+            TrackKind::Video | TrackKind::Overlay | TrackKind::Caption => VISUAL_CONTROLS,
+        }
+    }
+}
+
+/// One of the per-track switches a user can flip.
+///
+/// An enum rather than four separate booleans passed around by name because it
+/// makes "which switches exist" a closed set the compiler can check. Adding a
+/// fifth flag then fails to compile everywhere a flag is read or written,
+/// rather than silently reading `false` for the one nobody remembered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrackFlag {
+    Muted,
+    Solo,
+    Locked,
+    Hidden,
+}
+
+impl TrackFlag {
+    /// Read this flag off a track.
+    ///
+    /// Exhaustive so that adding a variant is a compile error here rather than
+    /// a flag that reads `false` on every track forever.
+    pub fn get(self, track: &Track) -> bool {
+        match self {
+            TrackFlag::Muted => track.muted,
+            TrackFlag::Solo => track.solo,
+            TrackFlag::Locked => track.locked,
+            TrackFlag::Hidden => track.hidden,
+        }
+    }
+
+    /// Write this flag on a track.
+    ///
+    /// The single place any flag is assigned. An edit that sets a flag goes
+    /// through here, so "which code can change a track flag" has one answer.
+    pub fn set(self, track: &mut Track, value: bool) {
+        match self {
+            TrackFlag::Muted => track.muted = value,
+            TrackFlag::Solo => track.solo = value,
+            TrackFlag::Locked => track.locked = value,
+            TrackFlag::Hidden => track.hidden = value,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Track {
     pub id: TrackId,
@@ -161,6 +237,12 @@ pub struct Track {
     pub muted: bool,
     pub locked: bool,
     pub hidden: bool,
+    /// Added after schema v1 shipped, so a v1 file without the key still loads
+    /// and reads as not soloed — which is what every project written before
+    /// solo existed means. `#[serde(default)]` is what keeps that true; without
+    /// it, opening an older project would fail outright.
+    #[serde(default)]
+    pub solo: bool,
     pub height_px: f32,
 }
 
@@ -180,8 +262,34 @@ impl Track {
             muted: false,
             locked: false,
             hidden: false,
+            solo: false,
             height_px,
         }
+    }
+
+    /// Does this track contribute to what the user hears?
+    ///
+    /// Solo is stored per track but its *effect* is derived here rather than
+    /// written into `muted`. The tempting alternative — soloing a track
+    /// rewrites every other track's `muted`, and un-soloing rewrites them
+    /// back — needs somewhere to keep the flags it overwrote, and that
+    /// somewhere has to be restored exactly. Deriving instead makes clearing
+    /// the last solo restore every `muted` flag to its stored value for free,
+    /// because nothing was ever overwritten.
+    ///
+    /// An explicit `muted` beats `solo`: silence is a stronger statement than
+    /// "play this one", so a track that is both muted and soloed stays silent.
+    pub fn audible(&self, any_solo_in_sequence: bool) -> bool {
+        !self.muted && (!any_solo_in_sequence || self.solo)
+    }
+
+    /// Is this track drawn?
+    ///
+    /// Hidden is a user preference about the timeline, not about the export —
+    /// whether a hidden track reaches the output is decided where the export
+    /// graph is built, not here.
+    pub fn visible(&self) -> bool {
+        !self.hidden
     }
 }
 
@@ -569,5 +677,140 @@ impl ExportPreset {
             audio_codec: "aac".into(),
             audio_bitrate_bps: 192_000,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A sequence holding one track of each kind that differs in its controls.
+    fn sequence_with(kinds: &[(TrackKind, bool)]) -> Sequence {
+        let mut seq = Sequence::new("Main");
+        for (kind, muted) in kinds {
+            let mut track = Track::new(*kind, "t");
+            track.muted = *muted;
+            seq.tracks.push(track);
+        }
+        seq
+    }
+
+    #[test]
+    fn with_nothing_soloed_each_track_is_audible_unless_it_is_muted() {
+        let seq = sequence_with(&[(TrackKind::Audio, false), (TrackKind::Audio, true)]);
+        assert!(!seq.any_solo(), "nothing is soloed, so the question is mute alone");
+        assert!(seq.tracks[0].audible(seq.any_solo()));
+        assert!(!seq.tracks[1].audible(seq.any_solo()));
+    }
+
+    #[test]
+    fn soloing_one_track_inaudibles_every_other_track_regardless_of_its_own_mute() {
+        let mut seq = sequence_with(&[(TrackKind::Audio, false), (TrackKind::Audio, false)]);
+        seq.tracks[0].solo = true;
+
+        assert!(seq.any_solo());
+        assert!(seq.tracks[0].audible(seq.any_solo()));
+        // The second track's `muted` is false. It is still inaudible, because
+        // something else in the sequence is soloed. This is the case that the
+        // stored-mute design would have handled by overwriting this flag.
+        assert!(!seq.tracks[1].muted);
+        assert!(!seq.tracks[1].audible(seq.any_solo()));
+    }
+
+    #[test]
+    fn clearing_the_last_solo_restores_every_stored_mute_because_none_was_ever_overwritten() {
+        let mut seq = sequence_with(&[
+            (TrackKind::Audio, true),  // explicitly muted before soloing
+            (TrackKind::Audio, false),
+            (TrackKind::Audio, true),
+        ]);
+        let before: Vec<bool> = seq.tracks.iter().map(|t| t.muted).collect();
+
+        seq.tracks[1].solo = true;
+        assert!(!seq.tracks[0].audible(seq.any_solo()));
+        assert!(!seq.tracks[2].audible(seq.any_solo()));
+
+        seq.tracks[1].solo = false;
+        assert!(!seq.any_solo());
+
+        // Byte-for-byte: the flags a user set by hand are exactly what they
+        // were. There is no "pre-solo mute state" to have been lost.
+        let after: Vec<bool> = seq.tracks.iter().map(|t| t.muted).collect();
+        assert_eq!(before, after);
+        assert!(!seq.tracks[0].audible(seq.any_solo()), "still muted by hand");
+        assert!(seq.tracks[1].audible(seq.any_solo()), "back to audible");
+        assert!(!seq.tracks[2].audible(seq.any_solo()), "still muted by hand");
+    }
+
+    #[test]
+    fn an_explicit_mute_beats_solo_on_the_same_track() {
+        let mut track = Track::new(TrackKind::Audio, "A1");
+        track.muted = true;
+        track.solo = true;
+        // Silence is a stronger statement than "play this one".
+        assert!(!track.audible(true));
+    }
+
+    #[test]
+    fn visible_is_the_negation_of_hidden_and_says_nothing_about_audibility() {
+        let mut track = Track::new(TrackKind::Video, "V1");
+        assert!(track.visible());
+        TrackFlag::Hidden.set(&mut track, true);
+        assert!(!track.visible());
+        // Hiding a video track is a timeline preference. It must not be
+        // reported as "this track is silent", which is a different question.
+        assert!(track.audible(false));
+    }
+
+    #[test]
+    fn flags_round_trip_through_get_and_set_for_every_flag() {
+        let mut track = Track::new(TrackKind::Audio, "A1");
+        for flag in [
+            TrackFlag::Muted,
+            TrackFlag::Solo,
+            TrackFlag::Locked,
+            TrackFlag::Hidden,
+        ] {
+            assert!(!flag.get(&track), "{flag:?} starts false");
+            flag.set(&mut track, true);
+            assert!(flag.get(&track), "{flag:?} did not take the write");
+            flag.set(&mut track, false);
+            assert!(!flag.get(&track), "{flag:?} did not take the clear");
+        }
+    }
+
+    #[test]
+    fn only_audio_offers_mute_and_solo_and_every_kind_offers_lock() {
+        assert_eq!(
+            TrackKind::Audio.controls(),
+            &[TrackFlag::Muted, TrackFlag::Solo, TrackFlag::Locked]
+        );
+        for kind in [TrackKind::Video, TrackKind::Overlay, TrackKind::Caption] {
+            assert_eq!(
+                kind.controls(),
+                &[TrackFlag::Hidden, TrackFlag::Locked],
+                "{kind:?} offers hide and lock"
+            );
+        }
+    }
+
+    #[test]
+    fn a_track_serialised_without_a_solo_key_loads_as_not_soloed() {
+        // A v1 project file predates this field. The JSON is written by hand
+        // rather than by deleting the key from a round trip, so this pins the
+        // on-disk shape an old file actually has.
+        let v1 = r#"{
+            "id": "0192b3f4-0000-7000-8000-000000000001",
+            "kind": "Audio",
+            "name": "A1",
+            "clips": [],
+            "muted": false,
+            "locked": false,
+            "hidden": false,
+            "height_px": 56.0
+        }"#;
+        let track: Track = serde_json::from_str(v1).expect("a v1 track must still parse");
+        assert!(!track.solo);
+        assert_eq!(track.name, "A1");
     }
 }
